@@ -26,7 +26,6 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <inttypes.h>
-#include <time.h>
 #include <math.h>
 #include <string.h>
 #include <fcntl.h>
@@ -38,58 +37,7 @@
 
 #define ULLM_LOG_TAG "llama2"
 
-// ----------------------------------------------------------------------------
-// Transformer model
-
-typedef struct {
-    // token embedding table
-    float* token_embedding_table;    // (vocab_size, dim)
-    // weights for rmsnorms
-    float* rms_att_weight; // (layer, dim) rmsnorm weights
-    float* rms_ffn_weight; // (layer, dim)
-    // weights for matmuls. note dim == n_heads * head_size
-    float* wq; // (layer, dim, n_heads * head_size)
-    float* wk; // (layer, dim, n_kv_heads * head_size)
-    float* wv; // (layer, dim, n_kv_heads * head_size)
-    float* wo; // (layer, n_heads * head_size, dim)
-    // weights for ffn
-    float* w1; // (layer, hidden_dim, dim)
-    float* w2; // (layer, dim, hidden_dim)
-    float* w3; // (layer, hidden_dim, dim)
-    // final rmsnorm
-    float* rms_final_weight; // (dim,)
-    // (optional) classifier weights for the logits, on the last layer
-    float* wcls;
-} TransformerWeights;
-
-typedef struct {
-    // current wave of activations
-    float *x; // activation at current time stamp (dim,)
-    float *xb; // same, but inside a residual branch (dim,)
-    float *xb2; // an additional buffer just for convenience (dim,)
-    float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *q; // query (dim,)
-    float *k; // key (dim,)
-    float *v; // value (dim,)
-    float *att; // buffer for scores/attention values (n_heads, seq_len)
-    float *logits; // output logits
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
-} RunState;
-
-typedef struct {
-    UllmLlama2Config config;
-    TransformerWeights weights; // the weights of the model
-    RunState state; // buffers for the "wave" of activations in the forward pass
-    // some more state needed to properly clean up the memory mapping (sigh)
-    int fd; // file descriptor for memory mapping
-    float* data; // memory mapped data pointer
-    ssize_t file_size; // size of the checkpoint file in bytes
-} Transformer;
-
-void malloc_run_state(RunState* s, UllmLlama2Config* p) {
+void malloc_run_state(UllmLlama2RunState* s, const UllmLlama2Config* p) {
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     s->x = calloc(p->dim, sizeof(float));
@@ -110,7 +58,7 @@ void malloc_run_state(RunState* s, UllmLlama2Config* p) {
     }
 }
 
-void free_run_state(RunState* s) {
+void free_run_state(UllmLlama2RunState* s) {
     free(s->x);
     free(s->xb);
     free(s->xb2);
@@ -123,7 +71,7 @@ void free_run_state(RunState* s) {
     free(s->value_cache);
 }
 
-void memory_map_weights(TransformerWeights *w, UllmLlama2Config* p, float* ptr, int shared_weights) {
+void memory_map_weights(UllmLlama2TransformerWeights *w, UllmLlama2Config* p, float* ptr, int shared_weights) {
     int head_size = p->dim / p->n_heads;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layers = p->n_layers;
@@ -154,7 +102,7 @@ void memory_map_weights(TransformerWeights *w, UllmLlama2Config* p, float* ptr, 
     w->wcls = shared_weights ? w->token_embedding_table : ptr;
 }
 
-void read_checkpoint(const char* checkpoint, UllmLlama2Config* config, TransformerWeights* weights,
+void read_checkpoint(const char* checkpoint, UllmLlama2Config* config, UllmLlama2TransformerWeights* weights,
                      int* fd, float** data, ssize_t* file_size) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
@@ -176,18 +124,18 @@ void read_checkpoint(const char* checkpoint, UllmLlama2Config* config, Transform
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
-void build_transformer(Transformer *t, const char* checkpoint_path) {
+void build_transformer(UllmLlama2Transformer *t, const char* checkpoint_path) {
     // read in the UllmLlama2Config and the Weights from the checkpoint
     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
-    // allocate the RunState buffers
+    // allocate the UllmLlama2RunState buffers
     malloc_run_state(&t->state, &t->config);
 }
 
-void free_transformer(Transformer* t) {
+static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
     // close the memory mapping
     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
-    // free the RunState buffers
+    // free the UllmLlama2RunState buffers
     free_run_state(&t->state);
 }
 
@@ -241,12 +189,11 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     }
 }
 
-float* forward(Transformer* transformer, int token, int pos) {
-
+float* forward(UllmLlama2Transformer* transformer, int token, int pos) {
     // a few convenience variables
     UllmLlama2Config* p = &transformer->config;
-    TransformerWeights* w = &transformer->weights;
-    RunState* s = &transformer->state;
+    UllmLlama2TransformerWeights* w = &transformer->weights;
+    UllmLlama2RunState* s = &transformer->state;
     float *x = s->x;
     int dim = p->dim;
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
@@ -260,7 +207,6 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     // forward all the layers
     for(unsigned long long l = 0; l < p->n_layers; l++) {
-
         // attention rmsnorm
         rmsnorm(s->xb, x, w->rms_att_weight + l*dim, dim);
 
@@ -375,58 +321,48 @@ float* forward(Transformer* transformer, int token, int pos) {
 // ----------------------------------------------------------------------------
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
 
-typedef struct {
-    const char *str;
-    int id;
-} TokenIndex;
-
-typedef struct {
-    char** vocab;
-    float* vocab_scores;
-    TokenIndex *sorted_vocab;
-    int vocab_size;
-    unsigned int max_token_length;
-    unsigned char byte_pieces[512]; // stores all single-byte strings
-} Tokenizer;
-
 int compare_tokens(const void *a, const void *b) {
-    return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
+    return strcmp(((UllmLlama2TokenIndex*)a)->str, ((UllmLlama2TokenIndex*)b)->str);
 }
 
-void build_tokenizer(Tokenizer* t, const char* tokenizer_path, int vocab_size) {
-    // i should have written the vocab_size into the tokenizer file... sigh
-    t->vocab_size = vocab_size;
-    // malloc space to hold the scores and the strings
-    t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-    t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
-    t->sorted_vocab = NULL; // initialized lazily
-    for (int i = 0; i < 256; i++) {
-        t->byte_pieces[i * 2] = (unsigned char)i;
-        t->byte_pieces[i * 2 + 1] = '\0';
-    }
-    // read in the file
-    FILE *file = fopen(tokenizer_path, "rb");
-    if (!file) { fprintf(stderr, "couldn't load %s\n", tokenizer_path); exit(EXIT_FAILURE); }
-    if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
-    int len;
-    for (int i = 0; i < vocab_size; i++) {
-        if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
-        if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
-        t->vocab[i] = (char *)malloc(len + 1);
-        if (fread(t->vocab[i], len, 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
-        t->vocab[i][len] = '\0'; // add the string terminating token
-    }
-    fclose(file);
+void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) {
+  // TODO(aarossig): Check mallocs
+  // malloc space to hold the scores and the strings
+  UllmLlama2Tokenizer* t = &state->tokenizer;
+  const int32_t vocab_size = state->transformer.config.vocab_size;
+  t->vocab = (char**)malloc(vocab_size * sizeof(char*));
+  t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
+  t->sorted_vocab = NULL; // initialized lazily
+  for (int i = 0; i < 256; i++) {
+    t->byte_pieces[i * 2] = (unsigned char)i;
+    t->byte_pieces[i * 2 + 1] = '\0';
+  }
+  // read in the file
+  FILE *file = fopen(config->tokenizer_path, "rb");
+  if (!file) { fprintf(stderr, "couldn't load %s\n", config->tokenizer_path); exit(EXIT_FAILURE); }
+  if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+  int len;
+  for (int i = 0; i < vocab_size; i++) {
+    if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
+    if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    t->vocab[i] = (char *)malloc(len + 1);
+    if (fread(t->vocab[i], len, 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    t->vocab[i][len] = '\0'; // add the string terminating token
+  }
+  fclose(file);
 }
 
-void free_tokenizer(Tokenizer* t) {
-    for (int i = 0; i < t->vocab_size; i++) { free(t->vocab[i]); }
-    free(t->vocab);
-    free(t->vocab_scores);
-    free(t->sorted_vocab);
+static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
+  UllmLlama2Tokenizer* t = &state->tokenizer;
+  for (int i = 0; i < state->transformer.config.vocab_size; i++) {
+    free(t->vocab[i]);
+  }
+  free(t->vocab);
+  free(t->vocab_scores);
+  free(t->sorted_vocab);
 }
 
-const char* decode(Tokenizer* t, int prev_token, int token) {
+const char* decode(UllmLlama2Tokenizer* t, int prev_token, int token) {
     const char *piece = t->vocab[token];
     // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
     if (prev_token == 1 && piece[0] == ' ') { piece++; }
@@ -453,26 +389,28 @@ void safe_printf(const char *piece) {
     printf("%s", piece);
 }
 
-int str_lookup(const char *str, TokenIndex *sorted_vocab, int vocab_size) {
+int str_lookup(const char *str, UllmLlama2TokenIndex *sorted_vocab, int vocab_size) {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
-    TokenIndex tok = { .str = str }; // acts as the key to search for
-    TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
+    UllmLlama2TokenIndex tok = { .str = str }; // acts as the key to search for
+    UllmLlama2TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
     return res != NULL ? res->id : -1;
 }
 
-void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
+void encode(UllmLlama2State* state, const char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
     if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
 
+    int32_t vocab_size = state->transformer.config.vocab_size;
+    UllmLlama2Tokenizer* t = &state->tokenizer;
     if (t->sorted_vocab == NULL) {
         // lazily malloc and sort the vocabulary
-        t->sorted_vocab = malloc(t->vocab_size * sizeof(TokenIndex));
-        for (int i = 0; i < t->vocab_size; i++) {
+        t->sorted_vocab = malloc(vocab_size * sizeof(UllmLlama2TokenIndex));
+        for (int i = 0; i < vocab_size; i++) {
             t->sorted_vocab[i].str = t->vocab[i];
             t->sorted_vocab[i].id = i;
         }
-        qsort(t->sorted_vocab, t->vocab_size, sizeof(TokenIndex), compare_tokens);
+        qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
     }
 
     // create a temporary buffer that will store merge candidates of always two consecutive tokens
@@ -491,7 +429,7 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
     // TODO: pretty sure this isn't correct in the general case but I don't have the
     // energy to read more of the sentencepiece code to figure out what it's doing
     if (text[0] != '\0') {
-        int dummy_prefix = str_lookup(" ", t->sorted_vocab, t->vocab_size);
+        int dummy_prefix = str_lookup(" ", t->sorted_vocab, vocab_size);
         tokens[(*n_tokens)++] = dummy_prefix;
     }
 
@@ -528,7 +466,7 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
         }
 
         // ok c+1 is not a continuation byte, so we've read in a full codepoint
-        int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
+        int id = str_lookup(str_buffer, t->sorted_vocab, vocab_size);
 
         if (id != -1) {
             // we found this codepoint in vocab, add it as a token
@@ -553,7 +491,7 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
         for (int i=0; i < (*n_tokens-1); i++) {
             // check if we can merge the pair (tokens[i], tokens[i+1])
             sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
-            int id = str_lookup(str_buffer, t->sorted_vocab, t->vocab_size);
+            int id = str_lookup(str_buffer, t->sorted_vocab, vocab_size);
             if (id != -1 && t->vocab_scores[id] > best_score) {
                 // this merge pair exists in vocab! record its score and position
                 best_score = t->vocab_scores[id];
@@ -585,19 +523,6 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
 // The Sampler, which takes logits and returns a sampled token
 // sampling can be done in a few ways: greedy argmax, sampling, top-p sampling
 
-typedef struct {
-    float prob;
-    int index;
-} ProbIndex; // struct used when sorting probabilities during top-p sampling
-
-typedef struct {
-    int vocab_size;
-    ProbIndex* probindex; // buffer used in top-p sampling
-    float temperature;
-    float topp;
-    unsigned long long rng_state;
-} Sampler;
-
 int sample_argmax(float* probabilities, int n) {
     // return the index that has the highest probability
     int max_i = 0;
@@ -625,14 +550,14 @@ int sample_mult(float* probabilities, int n, float coin) {
 }
 
 int compare(const void* a, const void* b) {
-    ProbIndex* a_ = (ProbIndex*) a;
-    ProbIndex* b_ = (ProbIndex*) b;
+    UllmLlama2ProbIndex* a_ = (UllmLlama2ProbIndex*) a;
+    UllmLlama2ProbIndex* b_ = (UllmLlama2ProbIndex*) b;
     if (a_->prob > b_->prob) return -1;
     if (a_->prob < b_->prob) return 1;
     return 0;
 }
 
-int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
+int sample_topp(float* probabilities, int n, float topp, UllmLlama2ProbIndex* probindex, float coin) {
     // top-p sampling (or "nucleus sampling") samples from the smallest set of
     // tokens that exceed probability topp. This way we never sample tokens that
     // have very low probabilities and are less likely to go "off the rails".
@@ -650,7 +575,7 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
             n0++;
         }
     }
-    qsort(probindex, n0, sizeof(ProbIndex), compare);
+    qsort(probindex, n0, sizeof(UllmLlama2ProbIndex), compare);
 
     // truncate the list where cumulative probability exceeds topp
     float cumulative_prob = 0.0f;
@@ -675,235 +600,106 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-void build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
-    sampler->vocab_size = vocab_size;
-    sampler->temperature = temperature;
-    sampler->topp = topp;
-    sampler->rng_state = rng_seed;
-    // buffer only used with nucleus sampling; may not need but it's ~small
-    sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
+static void UllmLlama2BuildSampler(const UllmLlama2RunConfig* config,
+    UllmLlama2State* state) {
+  UllmLlama2Sampler* sampler = &state->sampler;
+  sampler->rng_state = config->rng_seed;
+  // buffer only used with nucleus sampling; may not need but it's ~small
+  sampler->probindex = malloc(state->transformer.config.vocab_size
+      * sizeof(UllmLlama2ProbIndex));
 }
 
-void free_sampler(Sampler* sampler) {
+static void UllmLlama2FreeSampler(UllmLlama2Sampler* sampler) {
     free(sampler->probindex);
 }
 
-unsigned int random_u32(unsigned long long *state) {
-    // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
-    *state ^= *state >> 12;
-    *state ^= *state << 25;
-    *state ^= *state >> 27;
-    return (*state * 0x2545F4914F6CDD1Dull) >> 32;
-}
-float random_f32(unsigned long long *state) { // random float32 in [0,1)
-    return (random_u32(state) >> 8) / 16777216.0f;
+uint32_t random_u32(uint64_t *state) {
+  // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
+  *state ^= *state >> 12;
+  *state ^= *state << 25;
+  *state ^= *state >> 27;
+  return (*state * 0x2545F4914F6CDD1Dull) >> 32;
 }
 
-int sample(Sampler* sampler, float* logits) {
-    // sample the token given the logits and some hyperparameters
-    int next;
-    if (sampler->temperature == 0.0f) {
-        // greedy argmax sampling: take the token with the highest probability
-        next = sample_argmax(logits, sampler->vocab_size);
+float random_f32(uint64_t *state) { // random float32 in [0,1)
+  return (random_u32(state) >> 8) / 16777216.0f;
+}
+
+int sample(const UllmLlama2RunConfig* config, UllmLlama2State* state, float* logits) {
+  // sample the token given the logits and some hyperparameters
+  UllmLlama2Sampler* sampler = &state->sampler;
+  const int32_t vocab_size = state->transformer.config.vocab_size;
+  int next;
+  if (config->temperature == 0.0f) {
+    // greedy argmax sampling: take the token with the highest probability
+    next = sample_argmax(logits, vocab_size);
+  } else {
+    // apply the temperature to the logits
+    for (int q=0; q < vocab_size; q++) { logits[q] /= config->temperature; }
+    // apply softmax to the logits to get the probabilities for next token
+    softmax(logits, vocab_size);
+    // flip a (float) coin (this is our source of entropy for sampling)
+    float coin = random_f32(&sampler->rng_state);
+    // we sample from this distribution to get the next token
+    if (config->topp <= 0 || config->topp >= 1) {
+      // simply sample from the predicted probability distribution
+      next = sample_mult(logits, vocab_size, coin);
     } else {
-        // apply the temperature to the logits
-        for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
-        // apply softmax to the logits to get the probabilities for next token
-        softmax(logits, sampler->vocab_size);
-        // flip a (float) coin (this is our source of entropy for sampling)
-        float coin = random_f32(&sampler->rng_state);
-        // we sample from this distribution to get the next token
-        if (sampler->topp <= 0 || sampler->topp >= 1) {
-            // simply sample from the predicted probability distribution
-            next = sample_mult(logits, sampler->vocab_size, coin);
-        } else {
-            // top-p (nucleus) sampling, clamping the least likely tokens to zero
-            next = sample_topp(logits, sampler->vocab_size, sampler->topp, sampler->probindex, coin);
-        }
+      // top-p (nucleus) sampling, clamping the least likely tokens to zero
+      next = sample_topp(logits, vocab_size, config->topp, sampler->probindex, coin);
     }
-    return next;
-}
-
-// ----------------------------------------------------------------------------
-// utilities: time
-
-long time_in_ms() {
-    // return time in milliseconds, for benchmarking the model speed
-    struct timespec time;
-    clock_gettime(CLOCK_REALTIME, &time);
-    return time.tv_sec * 1000 + time.tv_nsec / 1000000;
+  }
+  return next;
 }
 
 // ----------------------------------------------------------------------------
 // generation loop
 
-void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, const char *prompt, unsigned int steps) {
-    char *empty_prompt = "";
-    if (prompt == NULL) { prompt = empty_prompt; }
+static UllmStatus generate(const UllmLlama2RunConfig* config, UllmLlama2State* state) {
+  // +3 for '\0', ?BOS, ?EOS
+  int* prompt_tokens = (int*)malloc((strlen(config->prompt) + 3) * sizeof(int));
+  // encode the (string) prompt into tokens sequence
+  int num_prompt_tokens = 0;
+  encode(state, config->prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+  if (num_prompt_tokens == 0) {
+      ULOGE("Prompt contains zero tokens");
+      return ULLM_STATUS_INVALID_ARGUMENT;
+  }
 
-    // encode the (string) prompt into tokens sequence
-    int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
-    encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
-    if (num_prompt_tokens < 1) {
-        fprintf(stderr, "something is wrong, expected at least 1 prompt token\n");
-        exit(EXIT_FAILURE);
-    }
+  // start the main loop
+  int next;        // will store the next token in the sequence
+  int token = prompt_tokens[0]; // kick off with the first token in the prompt
+  unsigned int pos = 0;     // position in the sequence
+  while (pos < config->steps) {
+      // forward the transformer to get logits for the next token
+      float* logits = forward(&state->transformer, token, pos);
 
-    // start the main loop
-    long start = 0;  // used to time our code, only initialized after first iteration
-    int next;        // will store the next token in the sequence
-    int token = prompt_tokens[0]; // kick off with the first token in the prompt
-    unsigned int pos = 0;     // position in the sequence
-    while (pos < steps) {
+      // advance the state machine
+      if (pos < num_prompt_tokens - 1) {
+          // if we are still processing the input prompt, force the next prompt token
+          next = prompt_tokens[pos + 1];
+      } else {
+          // otherwise sample the next token from the logits
+          next = sample(config, state, logits);
+      }
+      pos++;
 
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
+      // data-dependent terminating condition: the BOS (=1) token delimits sequences
+      if (next == 1) { break; }
 
-        // advance the state machine
-        if (pos < num_prompt_tokens - 1) {
-            // if we are still processing the input prompt, force the next prompt token
-            next = prompt_tokens[pos + 1];
-        } else {
-            // otherwise sample the next token from the logits
-            next = sample(sampler, logits);
-        }
-        pos++;
+      // print the token as string, decode it with the Tokenizer object
+      const char* piece = decode(&state->tokenizer, token, next);
+      safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
+      token = next;
+  }
 
-        // data-dependent terminating condition: the BOS (=1) token delimits sequences
-        if (next == 1) { break; }
-
-        // print the token as string, decode it with the Tokenizer object
-        const char* piece = decode(tokenizer, token, next);
-        safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
-        fflush(stdout);
-        token = next;
-
-        // init the timer here because the first iteration can be slower
-        if (start == 0) { start = time_in_ms(); }
-    }
-    printf("\n");
-
-    // report achieved tok/s (pos-1 because the timer starts after first iteration)
-    if (pos > 1) {
-        long end = time_in_ms();
-        printf("achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
-    }
-
-    free(prompt_tokens);
+  printf("\n");
+  free(prompt_tokens);
+  return ULLM_STATUS_OK;
 }
 
-void read_stdin(const char* guide, char* buffer, size_t bufsize) {
-    // read a line from stdin, up to but not including \n
-    printf("%s", guide);
-    if (fgets(buffer, bufsize, stdin) != NULL) {
-        size_t len = strlen(buffer);
-        if (len > 0 && buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\0'; // strip newline
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// chat loop
-// I manually inspected the tokens for a few chat conversations compared to
-// python reference and that seemed ok, but this was not thoroughly tested and
-// is not safely implemented, it's more a proof of concept atm.
-
-void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
-          char *cli_user_prompt, char *cli_system_prompt, int steps) {
-
-    // buffers for reading the system prompt and user prompt from stdin
-    // you'll notice they are soomewhat haphazardly and unsafely set atm
-    char system_prompt[512];
-    char user_prompt[512];
-    char rendered_prompt[1152];
-    int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc(1152 * sizeof(int));
-    int user_idx;
-
-    // start the main loop
-    int8_t user_turn = 1; // user starts
-    int next = 0;        // will store the next token in the sequence
-    int token;       // stores the current token to feed into the transformer
-    int pos = 0;     // position in the sequence
-    while (pos < steps) {
-
-        // when it is the user's turn to contribute tokens to the dialog...
-        if (user_turn) {
-            // get the (optional) system prompt at position 0
-            if (pos == 0) {
-                // at position 0, the user can also contribute a system prompt
-                if (cli_system_prompt == NULL) {
-                    // system prompt was not passed in, attempt to get it from stdin
-                    read_stdin("Enter system prompt (optional): ", system_prompt, sizeof(system_prompt));
-                } else {
-                    // system prompt was passed in, use it
-                    strcpy(system_prompt, cli_system_prompt);
-                }
-            }
-            // get the user prompt
-            if (pos == 0 && cli_user_prompt != NULL) {
-                // user prompt for position 0 was passed in, use it
-                strcpy(user_prompt, cli_user_prompt);
-            } else {
-                // otherwise get user prompt from stdin
-                read_stdin("User: ", user_prompt, sizeof(user_prompt));
-            }
-            // render user/system prompts into the Llama 2 Chat schema
-            if (pos == 0 && system_prompt[0] != '\0') {
-                char system_template[] = "[INST] <<SYS>>\n%s\n<</SYS>>\n\n%s [/INST]";
-                sprintf(rendered_prompt, system_template, system_prompt, user_prompt);
-            } else {
-                char user_template[] = "[INST] %s [/INST]";
-                sprintf(rendered_prompt, user_template, user_prompt);
-            }
-            // encode the rendered prompt into tokens
-            encode(tokenizer, rendered_prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
-            user_idx = 0; // reset the user index
-            user_turn = 0;
-            printf("Assistant: ");
-        }
-
-        // determine the token to pass into the transformer next
-        if (user_idx < num_prompt_tokens) {
-            // if we are still processing the input prompt, force the next prompt token
-            token = prompt_tokens[user_idx++];
-        } else {
-            // otherwise use the next token sampled from previous turn
-            token = next;
-        }
-        // EOS (=2) token ends the Assistant turn
-        if (token == 2) { user_turn = 1; }
-
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
-        next = sample(sampler, logits);
-        pos++;
-
-        if (user_idx >= num_prompt_tokens && next != 2) {
-            // the Assistant is responding, so print its output
-            const char* piece = decode(tokenizer, token, next);
-            safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
-            fflush(stdout);
-        }
-        if (next == 2) { printf("\n"); }
-    }
-    printf("\n");
-    free(prompt_tokens);
-}
-
-void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
-  config->prompt = NULL;
-  config->checkpoint_path = NULL;
-  config->tokenizer_path = NULL;
-  config->temperature = 1.0f;
-  config->topp = 0.9f;
-  config->steps = 256;
-  config->rng_seed = 0;
-}
-
-UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config) {
+// Validates that the supplied config is correct.
+static UllmStatus UllmLlama2ValidateConfig(const UllmLlama2RunConfig* config) {
   if (config->prompt == NULL) {
     ULOGE("prompt must not be NULL");
     return ULLM_STATUS_INVALID_ARGUMENT;
@@ -924,32 +720,41 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config) {
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
+  return ULLM_STATUS_OK;
+}
+
+void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
+  config->prompt = NULL;
+  config->checkpoint_path = NULL;
+  config->tokenizer_path = NULL;
+  config->temperature = 1.0f;
+  config->topp = 0.9f;
+  config->steps = 256;
+  config->rng_seed = 0;
+}
+
+UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
+    UllmLlama2State* state) {
+  ULLM_RETURN_IF_ERROR(UllmLlama2ValidateConfig(config));
+
   // build the Transformer via the model .bin file
-  Transformer transformer;
-  build_transformer(&transformer, config->checkpoint_path);
-  if (config->steps > transformer.config.seq_len) {
+  build_transformer(&state->transformer, config->checkpoint_path);
+  if (config->steps > state->transformer.config.seq_len) {
     ULOGE("steps out of range: %u vs %" PRIu32,
-        config->steps, transformer.config.seq_len);
+        config->steps, state->transformer.config.seq_len);
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
   // build the Tokenizer via the tokenizer .bin file
-  Tokenizer tokenizer;
-  build_tokenizer(&tokenizer, config->tokenizer_path, transformer.config.vocab_size);
+  build_tokenizer(config, state);
 
   // build the Sampler
-  Sampler sampler;
-  build_sampler(&sampler, transformer.config.vocab_size, config->temperature, config->topp, config->rng_seed);
+  UllmLlama2BuildSampler(config, state);
 
-  // run!
-  generate(&transformer, &tokenizer, &sampler, config->prompt, config->steps);
-#if 0
-  chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, steps);
-#endif
-
-  // memory and file handles cleanup
-  free_sampler(&sampler);
-  free_tokenizer(&tokenizer);
-  free_transformer(&transformer);
-  return ULLM_STATUS_OK;
+  // Generate and cleanup.
+  UllmStatus status = generate(config, state);
+  UllmLlama2FreeSampler(&state->sampler);
+  UllmLlama2FreeTokenizer(state);
+  UllmLlama2FreeTransformer(&state->transformer);
+  return status;
 }

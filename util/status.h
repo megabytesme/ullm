@@ -21,6 +21,15 @@
 extern "C" {
 #endif
 
+// Returns if the status is not OK.
+#define ULLM_RETURN_IF_ERROR(status) \
+  do { \
+    UllmStatus _status = (status); \
+    if (_status != ULLM_STATUS_OK) { \
+      return _status; \
+    } \
+  } while(0)
+
 // The possible status of performing inference.
 typedef enum {
   // Success.
