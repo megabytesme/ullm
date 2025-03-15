@@ -18,12 +18,12 @@
 
 #include "ullm/llama2.h"
 
-TEST(Llama2, Stories15M) {
-  Llama2RunConfig run_config;
-  Llama2RunConfigInit(&run_config);
+TEST(UllmLlama2, Stories15M) {
+  UllmLlama2RunConfig run_config;
+  UllmLlama2RunConfigInit(&run_config);
   run_config.checkpoint_path = "ullm/tinystories15M.bin";
   run_config.tokenizer_path = "ullm/tokenizer.bin";
   run_config.prompt = "The birds chirp. Where do they go?";
-  UllmStatus status = Llama2Generate(&run_config);
+  UllmStatus status = UllmLlama2Generate(&run_config);
   EXPECT_EQ(status, ULLM_STATUS_OK);
 }

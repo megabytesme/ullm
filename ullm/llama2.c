@@ -80,7 +80,7 @@ typedef struct {
 } RunState;
 
 typedef struct {
-    Llama2Config config;
+    UllmLlama2Config config;
     TransformerWeights weights; // the weights of the model
     RunState state; // buffers for the "wave" of activations in the forward pass
     // some more state needed to properly clean up the memory mapping (sigh)
@@ -89,7 +89,7 @@ typedef struct {
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
-void malloc_run_state(RunState* s, Llama2Config* p) {
+void malloc_run_state(RunState* s, UllmLlama2Config* p) {
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     s->x = calloc(p->dim, sizeof(float));
@@ -123,7 +123,7 @@ void free_run_state(RunState* s) {
     free(s->value_cache);
 }
 
-void memory_map_weights(TransformerWeights *w, Llama2Config* p, float* ptr, int shared_weights) {
+void memory_map_weights(TransformerWeights *w, UllmLlama2Config* p, float* ptr, int shared_weights) {
     int head_size = p->dim / p->n_heads;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layers = p->n_layers;
@@ -154,12 +154,12 @@ void memory_map_weights(TransformerWeights *w, Llama2Config* p, float* ptr, int 
     w->wcls = shared_weights ? w->token_embedding_table : ptr;
 }
 
-void read_checkpoint(const char* checkpoint, Llama2Config* config, TransformerWeights* weights,
+void read_checkpoint(const char* checkpoint, UllmLlama2Config* config, TransformerWeights* weights,
                      int* fd, float** data, ssize_t* file_size) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
     // read in the config header
-    if (fread(config, sizeof(Llama2Config), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (fread(config, sizeof(UllmLlama2Config), 1, file) != 1) { exit(EXIT_FAILURE); }
     // negative vocab size is hacky way of signaling unshared weights. bit yikes.
     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
@@ -172,12 +172,12 @@ void read_checkpoint(const char* checkpoint, Llama2Config* config, TransformerWe
     if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
     *data = mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
     if (*data == MAP_FAILED) { fprintf(stderr, "mmap failed!\n"); exit(EXIT_FAILURE); }
-    float* weights_ptr = *data + sizeof(Llama2Config)/sizeof(float);
+    float* weights_ptr = *data + sizeof(UllmLlama2Config)/sizeof(float);
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
 void build_transformer(Transformer *t, const char* checkpoint_path) {
-    // read in the Llama2Config and the Weights from the checkpoint
+    // read in the UllmLlama2Config and the Weights from the checkpoint
     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
     // allocate the RunState buffers
     malloc_run_state(&t->state, &t->config);
@@ -244,7 +244,7 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
 float* forward(Transformer* transformer, int token, int pos) {
 
     // a few convenience variables
-    Llama2Config* p = &transformer->config;
+    UllmLlama2Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
     float *x = s->x;
@@ -893,7 +893,7 @@ void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
     free(prompt_tokens);
 }
 
-void Llama2RunConfigInit(Llama2RunConfig* config) {
+void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
   config->prompt = NULL;
   config->checkpoint_path = NULL;
   config->tokenizer_path = NULL;
@@ -903,7 +903,7 @@ void Llama2RunConfigInit(Llama2RunConfig* config) {
   config->rng_seed = 0;
 }
 
-UllmStatus Llama2Generate(const Llama2RunConfig* config) {
+UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config) {
   if (config->prompt == NULL) {
     ULOGE("prompt must not be NULL");
     return ULLM_STATUS_INVALID_ARGUMENT;

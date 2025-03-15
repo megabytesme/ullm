@@ -45,7 +45,7 @@ typedef struct {
   int32_t n_kv_heads;
   int32_t vocab_size;
   int32_t seq_len;
-} __attribute__((packed)) Llama2Config;
+} __attribute__((packed)) UllmLlama2Config;
 
 // The runtime config for the inference operation.
 typedef struct {
@@ -65,13 +65,13 @@ typedef struct {
 
   // The source of entropy.
   uint64_t rng_seed;
-} Llama2RunConfig;
+} UllmLlama2RunConfig;
 
-// Default initialize an Llama2RunConfig.
-void Llama2RunConfigInit(Llama2RunConfig* config);
+// Default initialize an UllmLlama2RunConfig.
+void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config);
 
-// Runs Llama2 inference with the supplied config.
-UllmStatus Llama2Generate(const Llama2RunConfig* config);
+// Runs UllmLlama2 inference with the supplied config.
+UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config);
 
 #ifdef __cplusplus
 }  // extern "C"
