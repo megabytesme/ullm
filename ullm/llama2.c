@@ -22,8 +22,6 @@
  * SOFTWARE.
  */
 
-/* Inference for Llama-2 Transformer model in pure C */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -31,24 +29,13 @@
 #include <math.h>
 #include <string.h>
 #include <fcntl.h>
-#if defined _WIN32
-    #include "win.h"
-#else
-    #include <unistd.h>
-    #include <sys/mman.h>
-#endif
+#include <unistd.h>
+#include <sys/mman.h>
+
+#include "ullm/llama2.h"
+
 // ----------------------------------------------------------------------------
 // Transformer model
-
-typedef struct {
-    int dim; // transformer dimension
-    int hidden_dim; // for ffn layers
-    int n_layers; // number of layers
-    int n_heads; // number of query heads
-    int n_kv_heads; // number of key/value heads (can be < query heads because of multiquery)
-    int vocab_size; // vocabulary size, usually 256 (byte-level)
-    int seq_len; // max sequence length
-} Config;
 
 typedef struct {
     // token embedding table
@@ -89,7 +76,7 @@ typedef struct {
 } RunState;
 
 typedef struct {
-    Config config; // the hyperparameters of the architecture (the blueprint)
+    Llama2Config config;
     TransformerWeights weights; // the weights of the model
     RunState state; // buffers for the "wave" of activations in the forward pass
     // some more state needed to properly clean up the memory mapping (sigh)
@@ -98,7 +85,7 @@ typedef struct {
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
-void malloc_run_state(RunState* s, Config* p) {
+void malloc_run_state(RunState* s, Llama2Config* p) {
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     s->x = calloc(p->dim, sizeof(float));
@@ -132,7 +119,7 @@ void free_run_state(RunState* s) {
     free(s->value_cache);
 }
 
-void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared_weights) {
+void memory_map_weights(TransformerWeights *w, Llama2Config* p, float* ptr, int shared_weights) {
     int head_size = p->dim / p->n_heads;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layers = p->n_layers;
@@ -163,12 +150,12 @@ void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared
     w->wcls = shared_weights ? w->token_embedding_table : ptr;
 }
 
-void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weights,
+void read_checkpoint(char* checkpoint, Llama2Config* config, TransformerWeights* weights,
                      int* fd, float** data, ssize_t* file_size) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
     // read in the config header
-    if (fread(config, sizeof(Config), 1, file) != 1) { exit(EXIT_FAILURE); }
+    if (fread(config, sizeof(Llama2Config), 1, file) != 1) { exit(EXIT_FAILURE); }
     // negative vocab size is hacky way of signaling unshared weights. bit yikes.
     int shared_weights = config->vocab_size > 0 ? 1 : 0;
     config->vocab_size = abs(config->vocab_size);
@@ -181,12 +168,12 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
     if (*fd == -1) { fprintf(stderr, "open failed!\n"); exit(EXIT_FAILURE); }
     *data = mmap(NULL, *file_size, PROT_READ, MAP_PRIVATE, *fd, 0);
     if (*data == MAP_FAILED) { fprintf(stderr, "mmap failed!\n"); exit(EXIT_FAILURE); }
-    float* weights_ptr = *data + sizeof(Config)/sizeof(float);
+    float* weights_ptr = *data + sizeof(Llama2Config)/sizeof(float);
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
 void build_transformer(Transformer *t, char* checkpoint_path) {
-    // read in the Config and the Weights from the checkpoint
+    // read in the Llama2Config and the Weights from the checkpoint
     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
     // allocate the RunState buffers
     malloc_run_state(&t->state, &t->config);
@@ -241,9 +228,7 @@ void softmax(float* x, int size) {
 void matmul(float* xout, float* x, float* w, int n, int d) {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
-    int i;
-    #pragma omp parallel for private(i)
-    for (i = 0; i < d; i++) {
+    for (int i = 0; i < d; i++) {
         float val = 0.0f;
         for (int j = 0; j < n; j++) {
             val += w[i * n + j] * x[j];
@@ -255,7 +240,7 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
 float* forward(Transformer* transformer, int token, int pos) {
 
     // a few convenience variables
-    Config* p = &transformer->config;
+    Llama2Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
     float *x = s->x;
@@ -303,9 +288,7 @@ float* forward(Transformer* transformer, int token, int pos) {
         }
 
         // multihead attention. iterate over all heads
-        int h;
-        #pragma omp parallel for private(h)
-        for (h = 0; h < p->n_heads; h++) {
+        for (int h = 0; h < p->n_heads; h++) {
             // get the query vector for this head
             float* q = s->q + h * head_size;
             // attention scores for this head
@@ -839,7 +822,6 @@ void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
     int8_t user_turn = 1; // user starts
     int next;        // will store the next token in the sequence
     int token;       // stores the current token to feed into the transformer
-    int prev_token;
     int pos = 0;     // position in the sequence
     while (pos < steps) {
 

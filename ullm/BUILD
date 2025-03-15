@@ -11,4 +11,5 @@ package(default_visibility = ["//:__subpackages__"])
 cc_library(
     name = "ullama2",
     srcs = ["llama2.c"],
+    hdrs = ["llama2.h"],
 )
