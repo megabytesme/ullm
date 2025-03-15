@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <time.h>
 #include <math.h>
 #include <string.h>
@@ -33,6 +34,9 @@
 #include <sys/mman.h>
 
 #include "ullm/llama2.h"
+#include "util/log.h"
+
+#define ULLM_LOG_TAG "llama2"
 
 // ----------------------------------------------------------------------------
 // Transformer model
@@ -899,22 +903,33 @@ void Llama2RunConfigInit(Llama2RunConfig* config) {
   config->rng_seed = 0;
 }
 
-UllmStatus Llama2RunInference(const Llama2RunConfig* config) {
+UllmStatus Llama2Generate(const Llama2RunConfig* config) {
+  if (config->prompt == NULL) {
+    ULOGE("prompt must not be NULL");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
   if (config->temperature < 0.0) {
-    // TODO(aarossig): Log this error.
+    ULOGE("temperature must not be negative");
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
   if (config->topp < 0.0f || config->topp > 1.0f) {
-    // TODO(aarossig): Log this error.
+    ULOGE("topp must be between 0.0f and 1.0f");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (config->steps == 0) {
+    ULOGE("steps must be greater than 0");
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
   // build the Transformer via the model .bin file
   Transformer transformer;
   build_transformer(&transformer, config->checkpoint_path);
-  if (config->steps == 0 || config->steps > transformer.config.seq_len) {
-    // TODO(aarossig): Log this error.
+  if (config->steps > transformer.config.seq_len) {
+    ULOGE("steps out of range: %u vs %" PRIu32,
+        config->steps, transformer.config.seq_len);
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 

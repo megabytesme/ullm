@@ -24,6 +24,6 @@ TEST(Llama2, Stories15M) {
   run_config.checkpoint_path = "ullm/tinystories15M.bin";
   run_config.tokenizer_path = "ullm/tokenizer.bin";
   run_config.prompt = "The birds chirp. Where do they go?";
-  UllmStatus status = Llama2RunInference(&run_config);
+  UllmStatus status = Llama2Generate(&run_config);
   EXPECT_EQ(status, ULLM_STATUS_OK);
 }

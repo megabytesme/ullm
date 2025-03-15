@@ -13,6 +13,7 @@ cc_library(
     srcs = ["llama2.c"],
     hdrs = ["llama2.h"],
     deps = [
+        "//util:log",
         "//util:status",
     ],
 )

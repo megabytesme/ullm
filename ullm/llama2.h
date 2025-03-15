@@ -71,7 +71,7 @@ typedef struct {
 void Llama2RunConfigInit(Llama2RunConfig* config);
 
 // Runs Llama2 inference with the supplied config.
-UllmStatus Llama2RunInference(const Llama2RunConfig* config);
+UllmStatus Llama2Generate(const Llama2RunConfig* config);
 
 #ifdef __cplusplus
 }  // extern "C"
