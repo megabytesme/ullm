@@ -9,7 +9,39 @@ package(default_visibility = ["//:__subpackages__"])
 # llama2 #######################################################################
 
 cc_library(
-    name = "ullama2",
+    name = "llama2",
     srcs = ["llama2.c"],
     hdrs = ["llama2.h"],
+    deps = [
+        "//util:status",
+    ],
+)
+
+genrule(
+    name = "models",
+    srcs = [
+       "@llama2//:tokenizer.bin",
+       "@tinystories15M//file",
+    ],
+    outs = [
+       "tinystories15M.bin",
+       "tokenizer.bin",
+    ],
+    cmd = """
+        cp $(location @tinystories15M//file) $(location :tinystories15M.bin);
+        cp $(location @llama2//:tokenizer.bin) $(location :tokenizer.bin);
+    """,
+)
+
+cc_test(
+    name = "llama2_test",
+    srcs = ["llama2_test.cc"],
+    data = [
+        ":models",
+    ],
+    deps = [
+        ":llama2",
+        "@googletest//:gtest",
+        "@googletest//:gtest_main",
+    ],
 )

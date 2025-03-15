@@ -22,10 +22,12 @@
  * SOFTWARE.
  */
 
-#ifndef ULLM_LLAMA2_H_
-#define ULLM_LLAMA2_H_
+#ifndef ULLM_ULLM_LLAMA2_H_
+#define ULLM_ULLM_LLAMA2_H_
 
 #include <stdint.h>
+
+#include "util/status.h"
 
 // Inference for Llama-2 Transformer model.
 
@@ -36,24 +38,43 @@ extern "C" {
 // The hyperparameters of the architecture (the blueprint).
 // Loaded from the model bin.
 typedef struct {
-  // Transformer dimension.
   int32_t dim;
-  // For ffn layers.
   int32_t hidden_dim;
-  // Number of layers.
   int32_t n_layers;
-  // Number of query heads.
   int32_t n_heads;
-  // Number of key/value heads (can be < query heads because of multiquery).
   int32_t n_kv_heads;
-  // vocabulary size, usually 256 (byte-level)
   int32_t vocab_size;
-  // max sequence length
   int32_t seq_len;
 } __attribute__((packed)) Llama2Config;
+
+// The runtime config for the inference operation.
+typedef struct {
+  // The prompt to generate a response to.
+  const char* prompt;
+
+  // The path to the checkpoint file.
+  const char* checkpoint_path;
+
+  // The path to the tokenizer file.
+  const char* tokenizer_path;
+
+  // Model configuration.
+  float temperature;
+  float topp;
+  unsigned int steps;
+
+  // The source of entropy.
+  uint64_t rng_seed;
+} Llama2RunConfig;
+
+// Default initialize an Llama2RunConfig.
+void Llama2RunConfigInit(Llama2RunConfig* config);
+
+// Runs Llama2 inference with the supplied config.
+UllmStatus Llama2RunInference(const Llama2RunConfig* config);
 
 #ifdef __cplusplus
 }  // extern "C"
 #endif
 
-#endif  // ULLM_LLAMA2_H_
+#endif  // ULLM_ULLM_LLAMA2_H_
