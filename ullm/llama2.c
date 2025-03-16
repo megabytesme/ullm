@@ -352,9 +352,23 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   UllmLlama2Tokenizer* t = &state->tokenizer;
   const int32_t vocab_size = state->transformer.config.vocab_size;
   t->vocab = (char**)UllmMemoryAlloc(vocab_size * sizeof(char*));
+  if (t->vocab == NULL) {
+    ULOGE("Failed to allocate vocab buffer");
+    return ULLM_STATUS_OOM;
+  }
+
   t->vocab_scores = (float*)UllmMemoryAlloc(vocab_size * sizeof(float));
-  t->sorted_vocab = NULL; // initialized lazily
-  // read in the file
+  if (t->vocab_scores == NULL) {
+    ULOGE("Failed to allocate vocab_scores buffer");
+    return ULLM_STATUS_OOM;
+  }
+
+  t->sorted_vocab = UllmMemoryAlloc(vocab_size * sizeof(UllmLlama2TokenIndex));
+  if (t->sorted_vocab == NULL) {
+    ULOGE("Failed to allocate sorted_vocab buffer");
+    return ULLM_STATUS_OOM;
+  }
+
   FILE *file = fopen(config->tokenizer_path, "rb");
   if (!file) {
     ULOGE("Failed to load tokenizer '%s'", config->tokenizer_path);
@@ -386,6 +400,12 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
 
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
+
+  for (int i = 0; i < vocab_size; i++) {
+      t->sorted_vocab[i].str = t->vocab[i];
+      t->sorted_vocab[i].id = i;
+  }
+  qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
 
   fclose(file);
   return ULLM_STATUS_OK;
@@ -446,19 +466,10 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
   // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
   int32_t vocab_size = state->transformer.config.vocab_size;
   UllmLlama2Tokenizer* t = &state->tokenizer;
-  if (t->sorted_vocab == NULL) {
-    // lazily UllmMemoryAlloc and sort the vocabulary
-    t->sorted_vocab = UllmMemoryAlloc(vocab_size * sizeof(UllmLlama2TokenIndex));
-    for (int i = 0; i < vocab_size; i++) {
-        t->sorted_vocab[i].str = t->vocab[i];
-        t->sorted_vocab[i].id = i;
-    }
-    qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
-  }
 
   // create a temporary buffer that will store merge candidates of always two consecutive tokens
   // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-  char* str_buffer = UllmMemoryAlloc((t->max_token_length*2 +1 +2) * sizeof(char));
+  char* str_buffer = UllmMemoryAlloc((t->max_token_length * 2 + 1 + 2) * sizeof(char));
   size_t str_len = 0;
 
   // start at 0 tokens
