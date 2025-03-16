@@ -102,7 +102,6 @@ typedef struct {
     float* vocab_scores;
     UllmLlama2TokenIndex *sorted_vocab;
     unsigned int max_token_length;
-    unsigned char byte_pieces[512]; // stores all single-byte strings
 } UllmLlama2Tokenizer;
 
 typedef struct {

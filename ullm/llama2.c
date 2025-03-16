@@ -354,10 +354,6 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   t->vocab = (char**)UllmMemoryAlloc(vocab_size * sizeof(char*));
   t->vocab_scores = (float*)UllmMemoryAlloc(vocab_size * sizeof(float));
   t->sorted_vocab = NULL; // initialized lazily
-  for (int i = 0; i < 256; i++) {
-    t->byte_pieces[i * 2] = (unsigned char)i;
-    t->byte_pieces[i * 2 + 1] = '\0';
-  }
   // read in the file
   FILE *file = fopen(config->tokenizer_path, "rb");
   if (!file) {
@@ -405,19 +401,6 @@ static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
   UllmMemoryFree(t->sorted_vocab);
 }
 
-const char* decode(UllmLlama2Tokenizer* t, int prev_token, int token) {
-  const char *piece = t->vocab[token];
-  // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
-  if (prev_token == 1 && piece[0] == ' ') { piece++; }
-  // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
-  // parse this and convert and return the actual byte
-  unsigned char byte_val;
-  if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
-    piece = (char*)t->byte_pieces + byte_val * 2;
-  }
-  return piece;
-}
-
 static void UllmLlama2EmitPiece(const UllmLlama2RunConfig* config,
     const char *piece) {
   // Filter out empty, invalid tokens, or non-printable characers.
@@ -427,6 +410,26 @@ static void UllmLlama2EmitPiece(const UllmLlama2RunConfig* config,
   }
 
   config->output_callback(piece, config->cookie);
+}
+
+static void UllmLlama2Decode(const UllmLlama2RunConfig* config,
+    UllmLlama2Tokenizer* t, int prev_token, int token) {
+  // following BOS (1) token strip leading whitespace
+  const char *piece = t->vocab[token];
+  if (prev_token == 1 && piece[0] == ' ') {
+    piece++;
+  }
+
+  // careful, some tokens designate raw bytes, and look like e.g. '<0x01>'
+  // parse this and convert and return the actual byte
+  unsigned char byte_val;
+  if (sscanf(piece, "<0x%02hhX>", &byte_val) == 1) {
+    char byte_piece[2] = {};
+    byte_piece[0] = byte_val;
+    UllmLlama2EmitPiece(config, byte_piece);
+  } else {
+    UllmLlama2EmitPiece(config, piece);
+  }
 }
 
 int str_lookup(const char *str, UllmLlama2TokenIndex *sorted_vocab, int vocab_size) {
@@ -778,9 +781,7 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
       // data-dependent terminating condition: the BOS (=1) token delimits sequences
       if (next == 1) { break; }
 
-      // print the token as string, decode it with the Tokenizer object
-      const char* piece = decode(&state->tokenizer, token, next);
-      UllmLlama2EmitPiece(config, piece);
+      UllmLlama2Decode(config, &state->tokenizer, token, next);
       token = next;
   }
 
