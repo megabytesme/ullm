@@ -404,6 +404,11 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     }
 
     t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
+    if (t->vocab[i] == NULL) {
+      ULOGE("Failed to alloc vocab memory");
+      return ULLM_STATUS_OOM;
+    }
+
     if (fread(t->vocab[i], len, 1, file) != 1) {
       ULOGE("Failed to read vocab");
       return ULLM_STATUS_IO_ERROR;
@@ -769,7 +774,13 @@ UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
 UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
   // +3 for '\0', ?BOS, ?EOS
-  int* prompt_tokens = (int*)UllmMemoryAlloc((strlen(config->prompt) + 3) * sizeof(int));
+  size_t prompt_tokens_size = (strlen(config->prompt) + 3) * sizeof(int);
+  int* prompt_tokens = UllmMemoryAlloc(prompt_tokens_size);
+  if (prompt_tokens == NULL) {
+    ULOGE("Failed to allocate prompt tokens");
+    return ULLM_STATUS_OOM;
+  }
+
   // encode the (string) prompt into tokens sequence
   int num_prompt_tokens = 0;
   UllmLlama2Encode(config, state, 1, 0, prompt_tokens, &num_prompt_tokens);
@@ -778,8 +789,7 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
       return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
-  // start the main loop
-  int next;        // will store the next token in the sequence
+  int next; // will store the next token in the sequence
   int token = prompt_tokens[0]; // kick off with the first token in the prompt
   unsigned int pos = 0;     // position in the sequence
   while (pos < config->steps) {
