@@ -375,9 +375,20 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
-  if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) {
+  uint32_t max_token_length;
+  if (fread(&max_token_length, sizeof(uint32_t), 1, file) != 1) {
     ULOGE("Failed to read max token length");
     return ULLM_STATUS_IO_ERROR;
+  }
+
+  // Create a temporary buffer that will store merge candidates of always two
+  // consecutive tokens. Double for concat, +1 for null terminator +2 for UTF8
+  // (in case max_token_length is 1)
+  size_t token_buffer_size = max_token_length * 2 + 1 + 1;
+  t->token_buffer = UllmMemoryAlloc(token_buffer_size);
+  if (t->token_buffer == NULL) {
+    ULOGE("Failed to allocate token_buffer");
+    return ULLM_STATUS_OOM;
   }
 
   for (int i = 0; i < vocab_size; i++) {
@@ -419,6 +430,7 @@ static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
   UllmMemoryFree(t->vocab);
   UllmMemoryFree(t->vocab_scores);
   UllmMemoryFree(t->sorted_vocab);
+  UllmMemoryFree(t->token_buffer);
 }
 
 static void UllmLlama2EmitPiece(const UllmLlama2RunConfig* config,
@@ -466,10 +478,6 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
   // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
   int32_t vocab_size = state->transformer.config.vocab_size;
   UllmLlama2Tokenizer* t = &state->tokenizer;
-
-  // create a temporary buffer that will store merge candidates of always two consecutive tokens
-  // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-  char* str_buffer = UllmMemoryAlloc((t->max_token_length * 2 + 1 + 2) * sizeof(char));
   size_t str_len = 0;
 
   // start at 0 tokens
@@ -511,17 +519,18 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
     }
 
     // append the current byte to the buffer
-    str_buffer[str_len++] = *c; // ++ is post-increment, incremented after this line
-    str_buffer[str_len] = '\0';
+    t->token_buffer[str_len++] = *c; // ++ is post-increment, incremented after this line
+    t->token_buffer[str_len] = '\0';
 
     // while the next character is a continuation byte, continue appending
-    // but if there are too many of them, just stop to avoid overruning str_buffer size.
+    // but if there are too many of them, just stop to avoid overruning
+    // token_buffer size.
     if ((*(c+1) & 0xC0) == 0x80 && str_len < 4) {
       continue;
     }
 
     // ok c+1 is not a continuation byte, so we've read in a full codepoint
-    int id = str_lookup(str_buffer, t->sorted_vocab, vocab_size);
+    int id = str_lookup(t->token_buffer, t->sorted_vocab, vocab_size);
 
     if (id != -1) {
       // we found this codepoint in vocab, add it as a token
@@ -531,7 +540,7 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
       // +3 is here because the first 3 vocab elements are <unk>, <s>, </s>
       // so the individual bytes only start at index 3
       for (int i=0; i < str_len; i++) {
-        tokens[(*n_tokens)++] = (unsigned char)str_buffer[i] + 3;
+        tokens[(*n_tokens)++] = (unsigned char)t->token_buffer[i] + 3;
       }
     }
     str_len = 0; // protect against a sequence of stray UTF8 continuation bytes
@@ -545,8 +554,8 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
 
     for (int i=0; i < (*n_tokens-1); i++) {
       // check if we can merge the pair (tokens[i], tokens[i+1])
-      sprintf(str_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
-      int id = str_lookup(str_buffer, t->sorted_vocab, vocab_size);
+      sprintf(t->token_buffer, "%s%s", t->vocab[tokens[i]], t->vocab[tokens[i+1]]);
+      int id = str_lookup(t->token_buffer, t->sorted_vocab, vocab_size);
       if (id != -1 && t->vocab_scores[id] > best_score) {
         // this merge pair exists in vocab! record its score and position
         best_score = t->vocab_scores[id];
@@ -572,8 +581,6 @@ static void UllmLlama2Encode(const UllmLlama2RunConfig* config,
   if (eos) {
     tokens[(*n_tokens)++] = 2;
   }
-
-  UllmMemoryFree(str_buffer);
 }
 
 // ----------------------------------------------------------------------------

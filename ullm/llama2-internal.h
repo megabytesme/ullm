@@ -67,51 +67,51 @@ typedef struct {
 } UllmLlama2TransformerWeights;
 
 typedef struct {
-    // current wave of activations
-    float *x; // activation at current time stamp (dim,)
-    float *xb; // same, but inside a residual branch (dim,)
-    float *xb2; // an additional buffer just for convenience (dim,)
-    float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float *q; // query (dim,)
-    float *k; // key (dim,)
-    float *v; // value (dim,)
-    float *att; // buffer for scores/attention values (n_heads, seq_len)
-    float *logits; // output logits
-    // kv cache
-    float* key_cache;   // (layer, seq_len, dim)
-    float* value_cache; // (layer, seq_len, dim)
+  // current wave of activations
+  float *x; // activation at current time stamp (dim,)
+  float *xb; // same, but inside a residual branch (dim,)
+  float *xb2; // an additional buffer just for convenience (dim,)
+  float *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
+  float *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
+  float *q; // query (dim,)
+  float *k; // key (dim,)
+  float *v; // value (dim,)
+  float *att; // buffer for scores/attention values (n_heads, seq_len)
+  float *logits; // output logits
+  // kv cache
+  float* key_cache;   // (layer, seq_len, dim)
+  float* value_cache; // (layer, seq_len, dim)
 } UllmLlama2RunState;
 
 typedef struct {
-    UllmLlama2Config config;
-    UllmLlama2TransformerWeights weights;
-    UllmLlama2RunState state;
-    int fd; // file descriptor for memory mapping
-    float* data; // memory mapped data pointer
-    ssize_t file_size; // size of the checkpoint file in bytes
+  UllmLlama2Config config;
+  UllmLlama2TransformerWeights weights;
+  UllmLlama2RunState state;
+  int fd; // file descriptor for memory mapping
+  float* data; // memory mapped data pointer
+  ssize_t file_size; // size of the checkpoint file in bytes
 } UllmLlama2Transformer;
 
 typedef struct {
-    const char *str;
-    int id;
+  const char *str;
+  int id;
 } UllmLlama2TokenIndex;
 
 typedef struct {
-    char** vocab;
-    float* vocab_scores;
-    UllmLlama2TokenIndex *sorted_vocab;
-    unsigned int max_token_length;
+  char** vocab;
+  float* vocab_scores;
+  UllmLlama2TokenIndex *sorted_vocab;
+  char* token_buffer;
 } UllmLlama2Tokenizer;
 
 typedef struct {
-    float prob;
-    int index;
+  float prob;
+  int index;
 } UllmLlama2ProbIndex;
 
 typedef struct {
-    UllmLlama2ProbIndex* probindex;
-    uint64_t rng_state;
+  UllmLlama2ProbIndex* probindex;
+  uint64_t rng_state;
 } UllmLlama2Sampler;
 
 #ifdef __cplusplus
