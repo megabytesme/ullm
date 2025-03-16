@@ -22,6 +22,10 @@ const char *UllmStatusToString(UllmStatus status) {
       return "OK";
     case ULLM_STATUS_INVALID_ARGUMENT:
       return "INVALID_ARGUMENT";
+    case ULLM_STATUS_IO_ERROR:
+      return "IO_ERROR";
+    case ULLM_STATUS_OOM:
+      return "OOM";
     default:
       return "UNKNOWN_STATUS";
   }

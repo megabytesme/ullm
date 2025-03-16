@@ -37,6 +37,12 @@ typedef enum {
 
   // Invalid arguments were supplied.
   ULLM_STATUS_INVALID_ARGUMENT,
+
+  // There was an error accessing a file.
+  ULLM_STATUS_IO_ERROR,
+
+  // A memory allocation failed.
+  ULLM_STATUS_OOM,
 } UllmStatus;
 
 // Returns a string representation of a given status.
