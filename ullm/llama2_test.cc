@@ -18,12 +18,20 @@
 
 #include "ullm/llama2.h"
 
+namespace ullm {
+namespace {
+
+void OutputHandler(const char* token, void* cookie) {
+  fprintf(stdout, "%s", token);
+}
+
 TEST(UllmLlama2, Stories15M) {
   UllmLlama2RunConfig run_config;
   UllmLlama2RunConfigInit(&run_config);
   run_config.checkpoint_path = "ullm/tinystories15M.bin";
   run_config.tokenizer_path = "ullm/tokenizer.bin";
   run_config.prompt = "The birds chirp. Where do they go?";
+  run_config.output_callback = OutputHandler;
 
   UllmLlama2State state;
   UllmStatus status = UllmLlama2Init(&run_config, &state);
@@ -33,3 +41,6 @@ TEST(UllmLlama2, Stories15M) {
   // TODO(aarossig): Add a test to verify that it can run repeatedly.
   UllmLlama2Deinit(&state);
 }
+
+}  // namespace
+}  // namespace ullm

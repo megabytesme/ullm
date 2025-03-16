@@ -418,18 +418,15 @@ const char* decode(UllmLlama2Tokenizer* t, int prev_token, int token) {
   return piece;
 }
 
-void safe_printf(const char *piece) {
-  // piece might be a raw byte token, and we only want to print printable chars or whitespace
-  // because some of the other bytes can be various control codes, backspace, etc.
-  if (piece == NULL) { return; }
-  if (piece[0] == '\0') { return; }
-  if (piece[1] == '\0') {
-    unsigned char byte_val = piece[0];
-    if (!(isprint(byte_val) || isspace(byte_val))) {
-      return; // bad byte, don't print it
-    }
+static void UllmLlama2EmitPiece(const UllmLlama2RunConfig* config,
+    const char *piece) {
+  // Filter out empty, invalid tokens, or non-printable characers.
+  if (config->output_callback == NULL || piece == NULL || piece[0] == '\0'
+      || (piece[1] == '\0' && !isprint(piece[0]) && !isspace(piece[0]))) {
+    return;
   }
-  printf("%s", piece);
+
+  config->output_callback(piece, config->cookie);
 }
 
 int str_lookup(const char *str, UllmLlama2TokenIndex *sorted_vocab, int vocab_size) {
@@ -735,6 +732,8 @@ void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
   config->topp = 0.9f;
   config->steps = 256;
   config->rng_seed = 0;
+  config->output_callback = NULL;
+  config->cookie = NULL;
 }
 
 UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
@@ -781,11 +780,11 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
 
       // print the token as string, decode it with the Tokenizer object
       const char* piece = decode(&state->tokenizer, token, next);
-      safe_printf(piece); // same as printf("%s", piece), but skips "unsafe" bytes
+      UllmLlama2EmitPiece(config, piece);
       token = next;
   }
 
-  printf("\n");
+  UllmLlama2EmitPiece(config, "\n");
   UllmMemoryFree(prompt_tokens);
   return ULLM_STATUS_OK;
 }

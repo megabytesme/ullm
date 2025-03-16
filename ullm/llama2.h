@@ -36,6 +36,7 @@
 extern "C" {
 #endif
 
+// The runtime state for the inference engine.
 typedef struct {
   UllmLlama2Transformer transformer;
   UllmLlama2Tokenizer tokenizer;
@@ -60,6 +61,10 @@ typedef struct {
 
   // The source of entropy.
   uint64_t rng_seed;
+
+  // The callback and context for generated output.
+  void (*output_callback)(const char* token, void* cookie);
+  void* cookie;
 } UllmLlama2RunConfig;
 
 // Default initialize an UllmLlama2RunConfig.
