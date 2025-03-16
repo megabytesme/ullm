@@ -652,10 +652,63 @@ int sample(const UllmLlama2RunConfig* config, UllmLlama2State* state, float* log
   return next;
 }
 
-// ----------------------------------------------------------------------------
-// generation loop
+// Validates that the supplied config is correct.
+static UllmStatus UllmLlama2ValidateConfig(const UllmLlama2RunConfig* config) {
+  if (config->prompt == NULL) {
+    ULOGE("prompt must not be NULL");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
 
-static UllmStatus generate(const UllmLlama2RunConfig* config, UllmLlama2State* state) {
+  if (config->temperature < 0.0) {
+    ULOGE("temperature must not be negative");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (config->topp < 0.0f || config->topp > 1.0f) {
+    ULOGE("topp must be between 0.0f and 1.0f");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (config->steps == 0) {
+    ULOGE("steps must be greater than 0");
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  return ULLM_STATUS_OK;
+}
+
+void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
+  config->prompt = NULL;
+  config->checkpoint_path = NULL;
+  config->tokenizer_path = NULL;
+  config->temperature = 1.0f;
+  config->topp = 0.9f;
+  config->steps = 256;
+  config->rng_seed = 0;
+}
+
+UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
+    UllmLlama2State* state) {
+  ULLM_RETURN_IF_ERROR(UllmLlama2ValidateConfig(config));
+
+  // build the Transformer via the model .bin file
+  build_transformer(&state->transformer, config->checkpoint_path);
+  if (config->steps > state->transformer.config.seq_len) {
+    ULOGE("steps out of range: %u vs %" PRIu32,
+        config->steps, state->transformer.config.seq_len);
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  // build the Tokenizer via the tokenizer .bin file
+  build_tokenizer(config, state);
+
+  // build the Sampler
+  UllmLlama2BuildSampler(config, state);
+  return ULLM_STATUS_OK;
+}
+
+UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
+    UllmLlama2State* state) {
   // +3 for '\0', ?BOS, ?EOS
   int* prompt_tokens = (int*)malloc((strlen(config->prompt) + 3) * sizeof(int));
   // encode the (string) prompt into tokens sequence
@@ -698,63 +751,8 @@ static UllmStatus generate(const UllmLlama2RunConfig* config, UllmLlama2State* s
   return ULLM_STATUS_OK;
 }
 
-// Validates that the supplied config is correct.
-static UllmStatus UllmLlama2ValidateConfig(const UllmLlama2RunConfig* config) {
-  if (config->prompt == NULL) {
-    ULOGE("prompt must not be NULL");
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  if (config->temperature < 0.0) {
-    ULOGE("temperature must not be negative");
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  if (config->topp < 0.0f || config->topp > 1.0f) {
-    ULOGE("topp must be between 0.0f and 1.0f");
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  if (config->steps == 0) {
-    ULOGE("steps must be greater than 0");
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  return ULLM_STATUS_OK;
-}
-
-void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
-  config->prompt = NULL;
-  config->checkpoint_path = NULL;
-  config->tokenizer_path = NULL;
-  config->temperature = 1.0f;
-  config->topp = 0.9f;
-  config->steps = 256;
-  config->rng_seed = 0;
-}
-
-UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
-    UllmLlama2State* state) {
-  ULLM_RETURN_IF_ERROR(UllmLlama2ValidateConfig(config));
-
-  // build the Transformer via the model .bin file
-  build_transformer(&state->transformer, config->checkpoint_path);
-  if (config->steps > state->transformer.config.seq_len) {
-    ULOGE("steps out of range: %u vs %" PRIu32,
-        config->steps, state->transformer.config.seq_len);
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  // build the Tokenizer via the tokenizer .bin file
-  build_tokenizer(config, state);
-
-  // build the Sampler
-  UllmLlama2BuildSampler(config, state);
-
-  // Generate and cleanup.
-  UllmStatus status = generate(config, state);
+void UllmLlama2Deinit(UllmLlama2State* state) {
   UllmLlama2FreeSampler(&state->sampler);
   UllmLlama2FreeTokenizer(state);
   UllmLlama2FreeTransformer(&state->transformer);
-  return status;
 }

@@ -26,6 +26,10 @@ TEST(UllmLlama2, Stories15M) {
   run_config.prompt = "The birds chirp. Where do they go?";
 
   UllmLlama2State state;
-  UllmStatus status = UllmLlama2Generate(&run_config, &state);
-  EXPECT_EQ(status, ULLM_STATUS_OK);
+  UllmStatus status = UllmLlama2Init(&run_config, &state);
+  ASSERT_EQ(status, ULLM_STATUS_OK);
+  status = UllmLlama2Generate(&run_config, &state);
+  ASSERT_EQ(status, ULLM_STATUS_OK);
+  // TODO(aarossig): Add a test to verify that it can run repeatedly.
+  UllmLlama2Deinit(&state);
 }

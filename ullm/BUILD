@@ -11,7 +11,10 @@ package(default_visibility = ["//:__subpackages__"])
 cc_library(
     name = "llama2",
     srcs = ["llama2.c"],
-    hdrs = ["llama2.h"],
+    hdrs = [
+        "llama2.h",
+        "llama2-internal.h",
+    ],
     deps = [
         "//util:log",
         "//util:status",
