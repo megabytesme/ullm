@@ -16,6 +16,7 @@ cc_library(
         "llama2-internal.h",
     ],
     deps = [
+        "//sys:memory",
         "//util:log",
         "//util:status",
     ],

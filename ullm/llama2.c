@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+#include "sys/memory.h"
 #include "ullm/llama2.h"
 #include "util/log.h"
 
@@ -41,16 +42,16 @@ static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   UllmLlama2RunState* s = &t->state;
   UllmLlama2Config* p = &t->config;
   int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-  s->x = malloc(p->dim * sizeof(float));
-  s->xb = malloc(p->dim * sizeof(float));
-  s->xb2 = malloc(p->dim * sizeof(float));
-  s->hb = malloc(p->hidden_dim * sizeof(float));
-  s->hb2 = malloc(p->hidden_dim * sizeof(float));
-  s->q = malloc(p->dim * sizeof(float));
-  s->key_cache = malloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
-  s->value_cache = malloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
-  s->att = malloc(p->n_heads * p->seq_len * sizeof(float));
-  s->logits = malloc(p->vocab_size * sizeof(float));
+  s->x = UllmMemoryAlloc(p->dim * sizeof(float));
+  s->xb = UllmMemoryAlloc(p->dim * sizeof(float));
+  s->xb2 = UllmMemoryAlloc(p->dim * sizeof(float));
+  s->hb = UllmMemoryAlloc(p->hidden_dim * sizeof(float));
+  s->hb2 = UllmMemoryAlloc(p->hidden_dim * sizeof(float));
+  s->q = UllmMemoryAlloc(p->dim * sizeof(float));
+  s->key_cache = UllmMemoryAlloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
+  s->value_cache = UllmMemoryAlloc(p->n_layers * p->seq_len * kv_dim * sizeof(float));
+  s->att = UllmMemoryAlloc(p->n_heads * p->seq_len * sizeof(float));
+  s->logits = UllmMemoryAlloc(p->vocab_size * sizeof(float));
   if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q || !s->key_cache
       || !s->value_cache || !s->att || !s->logits) {
     ULOGE("Failed to allocate run state");
@@ -146,16 +147,16 @@ static UllmStatus UllmLlama2BuildTransformer(const UllmLlama2RunConfig* config,
 static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
   if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
   if (t->fd != -1) { close(t->fd); }
-  free(t->state.x);
-  free(t->state.xb);
-  free(t->state.xb2);
-  free(t->state.hb);
-  free(t->state.hb2);
-  free(t->state.q);
-  free(t->state.att);
-  free(t->state.logits);
-  free(t->state.key_cache);
-  free(t->state.value_cache);
+  UllmMemoryFree(t->state.x);
+  UllmMemoryFree(t->state.xb);
+  UllmMemoryFree(t->state.xb2);
+  UllmMemoryFree(t->state.hb);
+  UllmMemoryFree(t->state.hb2);
+  UllmMemoryFree(t->state.q);
+  UllmMemoryFree(t->state.att);
+  UllmMemoryFree(t->state.logits);
+  UllmMemoryFree(t->state.key_cache);
+  UllmMemoryFree(t->state.value_cache);
 }
 
 // ----------------------------------------------------------------------------
@@ -345,12 +346,12 @@ int compare_tokens(const void *a, const void *b) {
 }
 
 void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) {
-  // TODO(aarossig): Check mallocs
-  // malloc space to hold the scores and the strings
+  // TODO(aarossig): Check UllmMemoryAllocs
+  // UllmMemoryAlloc space to hold the scores and the strings
   UllmLlama2Tokenizer* t = &state->tokenizer;
   const int32_t vocab_size = state->transformer.config.vocab_size;
-  t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-  t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
+  t->vocab = (char**)UllmMemoryAlloc(vocab_size * sizeof(char*));
+  t->vocab_scores = (float*)UllmMemoryAlloc(vocab_size * sizeof(float));
   t->sorted_vocab = NULL; // initialized lazily
   for (int i = 0; i < 256; i++) {
     t->byte_pieces[i * 2] = (unsigned char)i;
@@ -364,7 +365,7 @@ void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) 
   for (int i = 0; i < vocab_size; i++) {
     if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
     if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
-    t->vocab[i] = (char *)malloc(len + 1);
+    t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
     if (fread(t->vocab[i], len, 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
@@ -374,11 +375,11 @@ void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) 
 static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
   UllmLlama2Tokenizer* t = &state->tokenizer;
   for (int i = 0; i < state->transformer.config.vocab_size; i++) {
-    free(t->vocab[i]);
+    UllmMemoryFree(t->vocab[i]);
   }
-  free(t->vocab);
-  free(t->vocab_scores);
-  free(t->sorted_vocab);
+  UllmMemoryFree(t->vocab);
+  UllmMemoryFree(t->vocab_scores);
+  UllmMemoryFree(t->sorted_vocab);
 }
 
 const char* decode(UllmLlama2Tokenizer* t, int prev_token, int token) {
@@ -423,8 +424,8 @@ void encode(UllmLlama2State* state, const char *text, int8_t bos, int8_t eos, in
     int32_t vocab_size = state->transformer.config.vocab_size;
     UllmLlama2Tokenizer* t = &state->tokenizer;
     if (t->sorted_vocab == NULL) {
-        // lazily malloc and sort the vocabulary
-        t->sorted_vocab = malloc(vocab_size * sizeof(UllmLlama2TokenIndex));
+        // lazily UllmMemoryAlloc and sort the vocabulary
+        t->sorted_vocab = UllmMemoryAlloc(vocab_size * sizeof(UllmLlama2TokenIndex));
         for (int i = 0; i < vocab_size; i++) {
             t->sorted_vocab[i].str = t->vocab[i];
             t->sorted_vocab[i].id = i;
@@ -434,7 +435,7 @@ void encode(UllmLlama2State* state, const char *text, int8_t bos, int8_t eos, in
 
     // create a temporary buffer that will store merge candidates of always two consecutive tokens
     // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-    char* str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
+    char* str_buffer = UllmMemoryAlloc((t->max_token_length*2 +1 +2) * sizeof(char));
     size_t str_len = 0;
 
     // start at 0 tokens
@@ -535,7 +536,7 @@ void encode(UllmLlama2State* state, const char *text, int8_t bos, int8_t eos, in
     // add optional EOS (=2) token, if desired
     if (eos) tokens[(*n_tokens)++] = 2;
 
-    free(str_buffer);
+    UllmMemoryFree(str_buffer);
 }
 
 // ----------------------------------------------------------------------------
@@ -624,12 +625,12 @@ static void UllmLlama2BuildSampler(const UllmLlama2RunConfig* config,
   UllmLlama2Sampler* sampler = &state->sampler;
   sampler->rng_state = config->rng_seed;
   // buffer only used with nucleus sampling; may not need but it's ~small
-  sampler->probindex = malloc(state->transformer.config.vocab_size
+  sampler->probindex = UllmMemoryAlloc(state->transformer.config.vocab_size
       * sizeof(UllmLlama2ProbIndex));
 }
 
 static void UllmLlama2FreeSampler(UllmLlama2Sampler* sampler) {
-    free(sampler->probindex);
+    UllmMemoryFree(sampler->probindex);
 }
 
 uint32_t random_u32(uint64_t *state) {
@@ -723,7 +724,7 @@ UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
 UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
   // +3 for '\0', ?BOS, ?EOS
-  int* prompt_tokens = (int*)malloc((strlen(config->prompt) + 3) * sizeof(int));
+  int* prompt_tokens = (int*)UllmMemoryAlloc((strlen(config->prompt) + 3) * sizeof(int));
   // encode the (string) prompt into tokens sequence
   int num_prompt_tokens = 0;
   encode(state, config->prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
@@ -760,7 +761,7 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
   }
 
   printf("\n");
-  free(prompt_tokens);
+  UllmMemoryFree(prompt_tokens);
   return ULLM_STATUS_OK;
 }
 
