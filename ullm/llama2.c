@@ -345,7 +345,8 @@ int compare_tokens(const void *a, const void *b) {
     return strcmp(((UllmLlama2TokenIndex*)a)->str, ((UllmLlama2TokenIndex*)b)->str);
 }
 
-void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) {
+UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
+    UllmLlama2State* state) {
   // TODO(aarossig): Check UllmMemoryAllocs
   // UllmMemoryAlloc space to hold the scores and the strings
   UllmLlama2Tokenizer* t = &state->tokenizer;
@@ -359,17 +360,39 @@ void build_tokenizer(const UllmLlama2RunConfig* config, UllmLlama2State* state) 
   }
   // read in the file
   FILE *file = fopen(config->tokenizer_path, "rb");
-  if (!file) { fprintf(stderr, "couldn't load %s\n", config->tokenizer_path); exit(EXIT_FAILURE); }
-  if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
-  int len;
+  if (!file) {
+    ULOGE("Failed to load tokenizer '%s'", config->tokenizer_path);
+    return ULLM_STATUS_INVALID_ARGUMENT;
+  }
+
+  if (fread(&t->max_token_length, sizeof(int), 1, file) != 1) {
+    ULOGE("Failed to read max token length");
+    return ULLM_STATUS_IO_ERROR;
+  }
+
   for (int i = 0; i < vocab_size; i++) {
-    if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
-    if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) {
+      ULOGE("Failed to read vocab scores");
+      return ULLM_STATUS_IO_ERROR;
+    }
+
+    int len;
+    if (fread(&len, sizeof(int), 1, file) != 1) {
+      ULOGE("Failed to read len");
+      return ULLM_STATUS_IO_ERROR;
+    }
+
     t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
-    if (fread(t->vocab[i], len, 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
+    if (fread(t->vocab[i], len, 1, file) != 1) {
+      ULOGE("Failed to read vocab");
+      return ULLM_STATUS_IO_ERROR;
+    }
+
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
+
   fclose(file);
+  return ULLM_STATUS_OK;
 }
 
 static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
@@ -620,13 +643,17 @@ int sample_topp(float* probabilities, int n, float topp, UllmLlama2ProbIndex* pr
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-static void UllmLlama2BuildSampler(const UllmLlama2RunConfig* config,
+static UllmStatus UllmLlama2BuildSampler(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
   UllmLlama2Sampler* sampler = &state->sampler;
   sampler->rng_state = config->rng_seed;
-  // buffer only used with nucleus sampling; may not need but it's ~small
   sampler->probindex = UllmMemoryAlloc(state->transformer.config.vocab_size
       * sizeof(UllmLlama2ProbIndex));
+  if (sampler->probindex == NULL) {
+    return ULLM_STATUS_OOM;
+  }
+
+  return ULLM_STATUS_OK;
 }
 
 static void UllmLlama2FreeSampler(UllmLlama2Sampler* sampler) {
@@ -710,14 +737,9 @@ void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
 UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
   ULLM_RETURN_IF_ERROR(UllmLlama2ValidateConfig(config));
-
-  // build the Transformer via the model .bin file
   ULLM_RETURN_IF_ERROR(UllmLlama2BuildTransformer(config, state));
-  // build the Tokenizer via the tokenizer .bin file
-  build_tokenizer(config, state);
-
-  // build the Sampler
-  UllmLlama2BuildSampler(config, state);
+  ULLM_RETURN_IF_ERROR(UllmLlama2BuildTokenizer(config, state));
+  ULLM_RETURN_IF_ERROR(UllmLlama2BuildSampler(config, state));
   return ULLM_STATUS_OK;
 }
 
