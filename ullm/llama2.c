@@ -28,15 +28,12 @@
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
 
 #include "sys/memory.h"
 #include "ullm/llama2.h"
 #include "util/log.h"
 
-#define ULLM_LOG_TAG "llama2"
+#define ULLM_LOG_TAG "ullm.llama2"
 
 static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   UllmLlama2RunState* s = &t->state;
@@ -61,7 +58,8 @@ static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   return ULLM_STATUS_OK;
 }
 
-static void memory_map_weights(UllmLlama2TransformerWeights *w, UllmLlama2Config* p, float* ptr, int shared_weights) {
+static void memory_map_weights(UllmLlama2TransformerWeights *w,
+    UllmLlama2Config* p, const float* ptr, int shared_weights) {
   int head_size = p->dim / p->n_heads;
   uint64_t n_layers = p->n_layers;
   w->token_embedding_table = ptr;
@@ -92,61 +90,40 @@ static void memory_map_weights(UllmLlama2TransformerWeights *w, UllmLlama2Config
 }
 
 static UllmStatus UllmLlama2ReadCheckpoint(const UllmLlama2RunConfig* config,
-    UllmLlama2Transformer* t) {
-  FILE *file = fopen(config->checkpoint_path, "rb");
-  if (!file) {
-    ULOGE("Failed to read checkpoint '%s'", config->checkpoint_path);
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
+    UllmLlama2State* state) {
+  // memory map the Transformer weights into the data pointer
+  const char* file_ptr;
+  uint64_t file_size;
+  ULLM_RETURN_IF_ERROR(UllmFileMap(config->checkpoint_path,
+      &state->checkpoint_file, &file_ptr, &file_size));
 
-  if (fread(&t->config, sizeof(UllmLlama2Config), 1, file) != 1) {
-    ULOGE("Failed to read config header");
-    return ULLM_STATUS_IO_ERROR;
-  }
+  uint64_t offset = 0;
+  UllmLlama2Transformer* t = &state->transformer;
+  ULLM_RETURN_IF_ERROR(UllmFileRead(state->checkpoint_file, &offset,
+      &t->config, sizeof(UllmLlama2Config)));
 
   // negative vocab size is hacky way of signaling unshared weights. bit yikes.
   int shared_weights = t->config.vocab_size > 0 ? 1 : 0;
   t->config.vocab_size = abs(t->config.vocab_size);
 
-  // figure out the file size
-  fseek(file, 0, SEEK_END); // move file pointer to end of file
-  t->file_size = ftell(file); // get the file size, in bytes
-  fclose(file);
-
-  // memory map the Transformer weights into the data pointer
-  t->fd = open(config->checkpoint_path, O_RDONLY); // open in read only mode
-  if (t->fd == -1) {
-    ULOGE("Failed to open checkpoint '%s'", config->checkpoint_path);
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
-
-  t->data = mmap(NULL, t->file_size, PROT_READ, MAP_PRIVATE, t->fd, 0);
-  if (t->data == MAP_FAILED) {
-    ULOGE("Failed to mmap");
-    return ULLM_STATUS_IO_ERROR;
-  }
-
-  float* weights_ptr = t->data + sizeof(UllmLlama2Config) / sizeof(float);
+  const float* weights_ptr = (float*)&file_ptr[offset];
   memory_map_weights(&t->weights, &t->config, weights_ptr, shared_weights);
   return ULLM_STATUS_OK;
 }
 
 static UllmStatus UllmLlama2BuildTransformer(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
-  UllmLlama2Transformer* t = &state->transformer;
-  ULLM_RETURN_IF_ERROR(UllmLlama2ReadCheckpoint(config, t));
-  if (config->steps > t->config.seq_len) {
+  ULLM_RETURN_IF_ERROR(UllmLlama2ReadCheckpoint(config, state));
+  if (config->steps > state->transformer.config.seq_len) {
     ULOGE("steps out of range: %u vs %" PRIu32,
         config->steps, state->transformer.config.seq_len);
     return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
-  return UllmLlama2MallocRunState(t);
+  return UllmLlama2MallocRunState(&state->transformer);
 }
 
 static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
-  if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
-  if (t->fd != -1) { close(t->fd); }
   UllmMemoryFree(t->state.x);
   UllmMemoryFree(t->state.xb);
   UllmMemoryFree(t->state.xb2);
@@ -162,7 +139,7 @@ static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float* o, float* x, float* weight, int size) {
+void rmsnorm(float* o, float* x, const float* weight, int size) {
   // calculate sum of squares
   float ss = 0.0f;
   for (int j = 0; j < size; j++) {
@@ -197,7 +174,7 @@ void softmax(float* x, int size) {
   }
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
+void matmul(float* xout, float* x, const float* w, int n, int d) {
   // W (d,n) @ x (n,) -> xout (d,)
   // by far the most amount of time is spent inside this little function
   for (int i = 0; i < d; i++) {
@@ -222,7 +199,7 @@ float* forward(UllmLlama2Transformer* transformer, int token, int pos) {
   int head_size = dim / p->n_heads;
 
   // copy the token embedding into x
-  float* content_row = w->token_embedding_table + token * dim;
+  const float* content_row = w->token_embedding_table + token * dim;
   memcpy(x, content_row, dim * sizeof(*x));
 
   // forward all the layers
@@ -347,7 +324,6 @@ int compare_tokens(const void *a, const void *b) {
 
 UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
-  // TODO(aarossig): Check UllmMemoryAllocs
   // UllmMemoryAlloc space to hold the scores and the strings
   UllmLlama2Tokenizer* t = &state->tokenizer;
   const int32_t vocab_size = state->transformer.config.vocab_size;
@@ -369,17 +345,17 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     return ULLM_STATUS_OOM;
   }
 
-  FILE *file = fopen(config->tokenizer_path, "rb");
-  if (!file) {
-    ULOGE("Failed to load tokenizer '%s'", config->tokenizer_path);
-    return ULLM_STATUS_INVALID_ARGUMENT;
-  }
+  UllmFileHandle* tokenizer_file;
+  const char* file_ptr;
+  uint64_t file_size;
+  ULLM_RETURN_IF_ERROR(UllmFileMap(config->tokenizer_path,
+      &tokenizer_file, &file_ptr, &file_size));
 
-  uint32_t max_token_length;
-  if (fread(&max_token_length, sizeof(uint32_t), 1, file) != 1) {
-    ULOGE("Failed to read max token length");
-    return ULLM_STATUS_IO_ERROR;
-  }
+  uint64_t offset = 0;
+  uint32_t max_token_length = 0;
+  UllmStatus status = ULLM_STATUS_OK;
+  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+      &max_token_length, sizeof(uint32_t)));
 
   // Create a temporary buffer that will store merge candidates of always two
   // consecutive tokens. Double for concat, +1 for null terminator +2 for UTF8
@@ -388,43 +364,36 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   t->token_buffer = UllmMemoryAlloc(token_buffer_size);
   if (t->token_buffer == NULL) {
     ULOGE("Failed to allocate token_buffer");
-    return ULLM_STATUS_OOM;
+    ULLM_GOTO_IF_ERROR(cleanup, status, ULLM_STATUS_OOM);
   }
 
   for (int i = 0; i < vocab_size; i++) {
-    if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) {
-      ULOGE("Failed to read vocab scores");
-      return ULLM_STATUS_IO_ERROR;
-    }
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+        &t->vocab_scores[i], sizeof(float)));
 
-    int len;
-    if (fread(&len, sizeof(int), 1, file) != 1) {
-      ULOGE("Failed to read len");
-      return ULLM_STATUS_IO_ERROR;
-    }
-
+    uint32_t len;
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+        &len, sizeof(uint32_t)));
     t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
     if (t->vocab[i] == NULL) {
       ULOGE("Failed to alloc vocab memory");
-      return ULLM_STATUS_OOM;
+      ULLM_GOTO_IF_ERROR(cleanup, status, ULLM_STATUS_OOM);
     }
 
-    if (fread(t->vocab[i], len, 1, file) != 1) {
-      ULOGE("Failed to read vocab");
-      return ULLM_STATUS_IO_ERROR;
-    }
-
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+        t->vocab[i], len));
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
 
   for (int i = 0; i < vocab_size; i++) {
-      t->sorted_vocab[i].str = t->vocab[i];
-      t->sorted_vocab[i].id = i;
+    t->sorted_vocab[i].str = t->vocab[i];
+    t->sorted_vocab[i].id = i;
   }
   qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
 
-  fclose(file);
-  return ULLM_STATUS_OK;
+cleanup:
+  UllmFileUnmap(tokenizer_file);
+  return status;
 }
 
 static void UllmLlama2FreeTokenizer(UllmLlama2State* state) {
@@ -822,4 +791,5 @@ void UllmLlama2Deinit(UllmLlama2State* state) {
   UllmLlama2FreeSampler(&state->sampler);
   UllmLlama2FreeTokenizer(state);
   UllmLlama2FreeTransformer(&state->transformer);
+  UllmFileUnmap(state->checkpoint_file);
 }

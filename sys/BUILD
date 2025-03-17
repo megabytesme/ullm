@@ -6,6 +6,19 @@
 
 package(default_visibility = ["//:__subpackages__"])
 
+# file #########################################################################
+
+cc_library(
+    name = "file",
+    srcs = ["file.c"],
+    hdrs = ["file.h"],
+    deps = [
+        ":memory",
+        "//util:log",
+        "//util:status",
+    ],
+)
+
 # memory #######################################################################
 
 cc_library(
@@ -13,4 +26,3 @@ cc_library(
     srcs = ["memory.c"],
     hdrs = ["memory.h"],
 )
-

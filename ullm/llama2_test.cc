@@ -51,7 +51,7 @@ The birds flew away, happy and full.
   UllmStatus status = UllmLlama2Init(&run_config, &state);
   ASSERT_EQ(status, ULLM_STATUS_OK);
   status = UllmLlama2Generate(&run_config, &state);
-  ASSERT_EQ(status, ULLM_STATUS_OK);
+  EXPECT_EQ(status, ULLM_STATUS_OK);
   // TODO(aarossig): Add a test to verify that it can run repeatedly.
   UllmLlama2Deinit(&state);
 

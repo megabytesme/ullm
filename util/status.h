@@ -30,6 +30,14 @@ extern "C" {
     } \
   } while(0)
 
+#define ULLM_GOTO_IF_ERROR(label, status_var, status) \
+  do { \
+    status_var = (status); \
+    if (status_var != ULLM_STATUS_OK) { \
+      goto label; \
+    } \
+  } while(0)
+
 // The possible status of performing inference.
 typedef enum {
   // Success.
