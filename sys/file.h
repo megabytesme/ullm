@@ -26,12 +26,16 @@
 extern "C" {
 #endif
 
-// A forward declaration of a file handle type.
-typedef struct UllmFileHandle UllmFileHandle;
+// File handle details.
+typedef struct UllmFileHandle {
+  int fd;
+  const char* ptr;
+  uint64_t size;
+} UllmFileHandle;
 
 // Opens the supplied file, maps into memory and populates the size or
 // returns an error.
-UllmStatus UllmFileMap(const char* path, UllmFileHandle** handle,
+UllmStatus UllmFileMap(const char* path, UllmFileHandle* handle,
     const char** ptr, uint64_t* size);
 
 // Unmaps a file and closes it. This invlidates any pointers to file contents.

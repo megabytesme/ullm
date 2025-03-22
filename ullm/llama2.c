@@ -99,7 +99,7 @@ static UllmStatus UllmLlama2ReadCheckpoint(const UllmLlama2RunConfig* config,
 
   uint64_t offset = 0;
   UllmLlama2Transformer* t = &state->transformer;
-  ULLM_RETURN_IF_ERROR(UllmFileRead(state->checkpoint_file, &offset,
+  ULLM_RETURN_IF_ERROR(UllmFileRead(&state->checkpoint_file, &offset,
       &t->config, sizeof(UllmLlama2Config)));
 
   // negative vocab size is hacky way of signaling unshared weights. bit yikes.
@@ -345,7 +345,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     return ULLM_STATUS_OOM;
   }
 
-  UllmFileHandle* tokenizer_file;
+  UllmFileHandle tokenizer_file;
   const char* file_ptr;
   uint64_t file_size;
   ULLM_RETURN_IF_ERROR(UllmFileMap(config->tokenizer_path,
@@ -354,7 +354,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   uint64_t offset = 0;
   uint32_t max_token_length = 0;
   UllmStatus status = ULLM_STATUS_OK;
-  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
       &max_token_length, sizeof(uint32_t)));
 
   // Create a temporary buffer that will store merge candidates of always two
@@ -368,11 +368,11 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   }
 
   for (int i = 0; i < vocab_size; i++) {
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
         &t->vocab_scores[i], sizeof(float)));
 
     uint32_t len;
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
         &len, sizeof(uint32_t)));
     t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
     if (t->vocab[i] == NULL) {
@@ -380,7 +380,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
       ULLM_GOTO_IF_ERROR(cleanup, status, ULLM_STATUS_OOM);
     }
 
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
         t->vocab[i], len));
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
@@ -392,7 +392,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
 
 cleanup:
-  UllmFileUnmap(tokenizer_file);
+  UllmFileUnmap(&tokenizer_file);
   return status;
 }
 
@@ -792,5 +792,5 @@ void UllmLlama2Deinit(UllmLlama2State* state) {
   UllmLlama2FreeSampler(&state->sampler);
   UllmLlama2FreeTokenizer(state);
   UllmLlama2FreeTransformer(&state->transformer);
-  UllmFileUnmap(state->checkpoint_file);
+  UllmFileUnmap(&state->checkpoint_file);
 }

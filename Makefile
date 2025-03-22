@@ -9,13 +9,13 @@
 OUT := out
 
 SRCS := \
-		$(OUT)/c-flags/lib/c-flags.c \
-		$(OUT)/c-flags/lib/string-view.c \
+    $(OUT)/c-flags/lib/c-flags.c \
+    $(OUT)/c-flags/lib/string-view.c \
     ullm/llama2.c \
     util/log.c \
-		util/status.c \
-		sys/file.c \
-		sys/memory.c \
+    util/status.c \
+    sys/file.c \
+    sys/memory.c \
     tools/ullm.c
 
 OPT := 0
@@ -30,16 +30,13 @@ OBJS := $(patsubst %.c, $(OUT)/%.o, $(SRCS))
 
 CFLAGS := \
     -I . \
-		-I out/c-flags/lib \
+    -I out/c-flags/lib \
     -std=c99 \
-    -Wall -Werror \
-    -O$(OPT) \
-    -ffunction-sections \
-    -fdata-sections
+    -Wall \
+    -O$(OPT)
 
 LDFLAGS := \
-    -Wl,-gc-sections \
-		-lm
+    -lm
 
 .PHONY:
 all: $(BIN).elf

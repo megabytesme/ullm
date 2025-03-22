@@ -29,16 +29,10 @@
 
 #define ULLM_LOG_TAG "ullm.file"
 
-typedef struct UllmFileHandle {
-  int fd;
-  const char* ptr;
-  uint64_t size;
-} UllmFileHandle;
 
-UllmStatus UllmFileMap(const char* path, UllmFileHandle** handle,
+UllmStatus UllmFileMap(const char* path, UllmFileHandle* handle,
     const char** ptr, uint64_t* size) {
-  *handle = UllmMemoryAlloc(sizeof(UllmFileHandle));
-  memset(*handle, 0, sizeof(UllmFileHandle));
+  memset(handle, 0, sizeof(UllmFileHandle));
 
   struct stat st;
   if (stat(path, &st) != 0) {
@@ -46,23 +40,23 @@ UllmStatus UllmFileMap(const char* path, UllmFileHandle** handle,
     return ULLM_STATUS_IO_ERROR;
   }
 
-  (*handle)->fd = open(path, O_RDONLY);
-  if ((*handle)->fd < 0) {
+  handle->fd = open(path, O_RDONLY);
+  if (handle->fd < 0) {
     ULOGE("Failed to open file '%s': %s (%d)", path, strerror(errno), errno);
     return ULLM_STATUS_IO_ERROR;
   }
 
   *size = st.st_size;
-  *ptr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, (*handle)->fd, 0);
+  *ptr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, handle->fd, 0);
   if (*ptr == MAP_FAILED) {
     ULOGE("Failed to mmap '%s': %s (%d)", path, strerror(errno), errno);
     return ULLM_STATUS_IO_ERROR;
   }
 
-  (*handle)->ptr = *ptr;
-  (*handle)->size = st.st_size;
+  handle->ptr = *ptr;
+  handle->size = st.st_size;
   ULOGI("Mapped file '%s' with size %" PRIu64 ", handle %p",
-      path, (*handle)->size, *handle);
+      path, handle->size, handle);
   return ULLM_STATUS_OK;
 }
 
@@ -84,8 +78,6 @@ void UllmFileUnmap(UllmFileHandle* handle) {
   if (handle->fd >= 0) {
     close(handle->fd);
   }
-
-  UllmMemoryFree(handle);
 }
 
 UllmStatus UllmFileRead(const UllmFileHandle* file, uint64_t* offset,
