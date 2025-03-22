@@ -733,6 +733,7 @@ void UllmLlama2RunConfigInit(UllmLlama2RunConfig* config) {
 
 UllmStatus UllmLlama2Init(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
+  memset(state, 0, sizeof(UllmLlama2State));
   ULLM_RETURN_IF_ERROR(UllmLlama2ValidateConfig(config));
   ULLM_RETURN_IF_ERROR(UllmLlama2BuildTransformer(config, state));
   ULLM_RETURN_IF_ERROR(UllmLlama2BuildTokenizer(config, state));

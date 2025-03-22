@@ -33,7 +33,7 @@ UllmStatus UllmRunLlama2(const char* prompt) {
   UllmLlama2RunConfigInit(&run_config);
   run_config.checkpoint_path = "ullm/tinystories15M.bin";
   run_config.tokenizer_path = "ullm/tokenizer.bin";
-  run_config.prompt = "The birds chirp. Where do they go?";
+  run_config.prompt = prompt;
   run_config.output_callback = OutputHandler;
 
   UllmLlama2State state;
@@ -85,6 +85,7 @@ int main(int argc, char** argv) {
   } else if (strlen(*model) == 0) {
     c_flags_usage();
   } else {
+    setbuf(stdout, NULL);
     UllmStatus status = UllmRun(*model, *prompt);
     if (status == ULLM_STATUS_OK) {
       return 0;
