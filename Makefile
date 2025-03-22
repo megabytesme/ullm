@@ -46,6 +46,8 @@ all: $(BIN).elf
 fetchdeps:
 	@mkdir -p $(OUT)
 	cd $(OUT); git clone https://github.com/DieTime/c-flags.git
+	cd $(OUT); git clone https://github.com/karpathy/llama2.c.git
+	cd $(OUT); curl -L -O https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin
 
 $(BIN).elf: $(OBJS)
 	cc $(CFLAGS) $^ $(LDFLAGS) -o $@
