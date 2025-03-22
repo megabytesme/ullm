@@ -37,14 +37,14 @@ char UllmLogLevelChar(int level) {
 void UllmLog(const char* tag, int level, const char* file, int line,
     const char* fmt, ...) {
   // Print level and tag.
-  printf("%c %s: ", UllmLogLevelChar(level), tag);
+  fprintf(stderr, "%c %s: ", UllmLogLevelChar(level), tag);
 
   // Print the formatted log.
   va_list args;
   va_start(args, fmt);
-  vprintf(fmt, args);
+  vfprintf(stderr, fmt, args);
   va_end(args);
 
   // Print a trailing newline.
-  printf("\n");
+  fprintf(stderr, "\n");
 }

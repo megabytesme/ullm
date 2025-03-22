@@ -20,3 +20,15 @@ cc_binary(
         "@cflags//:cflags",
     ],
 )
+
+# ullm-eswap ###################################################################
+
+cc_binary(
+    name = "ullm-eswap",
+    srcs = ["ullm_eswap.c"],
+    deps = [
+        "//sys:file",
+        "//util:log",
+        "@cflags//:cflags",
+    ],
+)
