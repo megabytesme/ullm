@@ -40,7 +40,7 @@ make clean && make fetchdeps && make -j`nproc`
 Run:
 
 ```
-./out/ullm.elf -p "The quick brown fox jumped. Where did they go?"
+./out/ullm.elf -c out/stories15M.bin -t out/llama2.c/tokenizer.bin -p "The quick brown fox jumped. Where did he go?"
 ```
 
 ## Ports
