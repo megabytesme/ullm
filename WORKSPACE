@@ -1,6 +1,15 @@
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
+# c-flags ######################################################################
+
+git_repository(
+    name = "cflags",
+    commit = "e73b8666ce88f63e7944244b94b0ed1c0488dab0",
+    remote = "https://github.com/DieTime/c-flags.git",
+    build_file = "@//build:cflags.bzl",
+)
+
 # llama2 #######################################################################
 
 git_repository(
