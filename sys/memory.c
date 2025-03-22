@@ -18,7 +18,12 @@
 
 #include <stdlib.h>
 
+#include "util/log.h"
+
+#define ULLM_LOG_TAG "ullm.sys.memory"
+
 void* UllmMemoryAlloc(size_t size) {
+  ULOGD("Allocating %zu bytes", size);
   return malloc(size);
 }
 

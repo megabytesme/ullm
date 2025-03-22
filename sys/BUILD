@@ -25,4 +25,7 @@ cc_library(
     name = "memory",
     srcs = ["memory.c"],
     hdrs = ["memory.h"],
+    deps = [
+        "//util:log",
+    ],
 )
