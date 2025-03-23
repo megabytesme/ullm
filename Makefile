@@ -16,9 +16,10 @@ SRCS := \
     util/status.c \
     sys/file.c \
     sys/memory.c \
+    sys/time.c \
     tools/ullm.c
 
-OPT := 0
+OPT := 2
 
 BIN := ullm
 

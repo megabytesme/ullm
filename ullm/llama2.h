@@ -39,7 +39,6 @@ extern "C" {
 
 // The runtime state for the inference engine.
 typedef struct {
-  UllmFileHandle checkpoint_file;
   UllmLlama2Transformer transformer;
   UllmLlama2Tokenizer tokenizer;
   UllmLlama2Sampler sampler;

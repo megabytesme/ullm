@@ -29,7 +29,13 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef __ALTIVEC__
+#include <altivec.h>
+#define ULLM_ALTIVEC_ENABLED
+#endif
+
 #include "sys/memory.h"
+#include "sys/time.h"
 #include "ullm/llama2.h"
 #include "util/log.h"
 
@@ -61,35 +67,61 @@ static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   return ULLM_STATUS_OK;
 }
 
-static void memory_map_weights(UllmLlama2TransformerWeights *w,
-    UllmLlama2Config* p, const float* ptr, int shared_weights) {
+static UllmStatus CopyWeight(const char* ptr, uint64_t* offset,
+    float** dst, size_t size, const char* name) {
+  size_t buf_size = size * sizeof(float);
+  *dst = UllmMemoryAlloc(buf_size);
+  if (*dst == NULL) {
+    ULOGE("Failed to allocate %s", name);
+    return ULLM_STATUS_OOM;
+  }
+
+  memcpy(*dst, &ptr[*offset], buf_size);
+  *offset += buf_size;
+  return ULLM_STATUS_OK;
+}
+
+static UllmStatus MemoryMapWeights(UllmLlama2TransformerWeights *w,
+    UllmLlama2Config* p, const char* ptr, uint64_t offset,
+    uint64_t file_size, int shared_weights) {
   int head_size = p->dim / p->n_heads;
   uint64_t n_layers = p->n_layers;
-  w->token_embedding_table = ptr;
-  ptr += p->vocab_size * p->dim;
-  w->rms_att_weight = ptr;
-  ptr += n_layers * p->dim;
-  w->wq = ptr;
-  ptr += n_layers * p->dim * (p->n_heads * head_size);
-  w->wk = ptr;
-  ptr += n_layers * p->dim * (p->n_kv_heads * head_size);
-  w->wv = ptr;
-  ptr += n_layers * p->dim * (p->n_kv_heads * head_size);
-  w->wo = ptr;
-  ptr += n_layers * (p->n_heads * head_size) * p->dim;
-  w->rms_ffn_weight = ptr;
-  ptr += n_layers * p->dim;
-  w->w1 = ptr;
-  ptr += n_layers * p->dim * p->hidden_dim;
-  w->w2 = ptr;
-  ptr += n_layers * p->hidden_dim * p->dim;
-  w->w3 = ptr;
-  ptr += n_layers * p->dim * p->hidden_dim;
-  w->rms_final_weight = ptr;
-  ptr += p->dim;
-  ptr += p->seq_len * head_size / 2; // skip what used to be freq_cis_real (for RoPE)
-  ptr += p->seq_len * head_size / 2; // skip what used to be freq_cis_imag (for RoPE)
-  w->wcls = shared_weights ? w->token_embedding_table : ptr;
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->token_embedding_table,
+      p->vocab_size * p->dim, "token_embedding_table"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_att_weight,
+      n_layers * p->dim, "rms_att_weight"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wq,
+      n_layers * p->dim * (p->n_heads * head_size), "wq"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wk,
+      n_layers * p->dim * (p->n_kv_heads * head_size), "wk"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wv,
+      n_layers * p->dim * (p->n_kv_heads * head_size), "wv"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wo,
+      n_layers * (p->n_heads * head_size) * p->dim, "wo"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_ffn_weight,
+      n_layers * p->dim, "rms_ffn_weight"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w1,
+      n_layers * p->dim * p->hidden_dim, "w1"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w2,
+      n_layers * p->hidden_dim * p->dim, "w2"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w3,
+      n_layers * p->dim * p->hidden_dim, "w3"));
+  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_final_weight,
+      p->dim, "rms_final_weight"));
+  offset += p->seq_len * head_size / 2; // skip what used to be freq_cis_real (for RoPE)
+  offset += p->seq_len * head_size / 2; // skip what used to be freq_cis_imag (for RoPE)
+  if (shared_weights) {
+    w->wcls = w->token_embedding_table;
+  } else {
+    uint64_t buf_size = file_size - offset;
+    w->wcls = UllmMemoryAlloc(buf_size);
+    if (w->wcls == NULL) {
+      ULOGE("Failed to allocate wcls");
+      return ULLM_STATUS_OOM;
+    }
+  }
+
+  return ULLM_STATUS_OK;
 }
 
 static UllmStatus UllmLlama2ReadCheckpoint(const UllmLlama2RunConfig* config,
@@ -97,20 +129,24 @@ static UllmStatus UllmLlama2ReadCheckpoint(const UllmLlama2RunConfig* config,
   // memory map the Transformer weights into the data pointer
   const char* file_ptr;
   uint64_t file_size;
+  UllmFileHandle checkpoint_file;
   ULLM_RETURN_IF_ERROR(UllmFileMap(config->checkpoint_path,
-      &state->checkpoint_file, &file_ptr, &file_size));
+      &checkpoint_file, &file_ptr, &file_size));
 
   uint64_t offset = 0;
   UllmLlama2Transformer* t = &state->transformer;
-  ULLM_RETURN_IF_ERROR(UllmFileRead(&state->checkpoint_file, &offset,
-      &t->config, sizeof(UllmLlama2Config)));
+  UllmStatus status = ULLM_STATUS_OK;
+  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(
+      &checkpoint_file, &offset, &t->config, sizeof(UllmLlama2Config)));
 
   // negative vocab size is hacky way of signaling unshared weights. bit yikes.
   int shared_weights = t->config.vocab_size > 0 ? 1 : 0;
   t->config.vocab_size = abs(t->config.vocab_size);
+  status = MemoryMapWeights(&t->weights, &t->config, file_ptr, offset,
+      file_size, shared_weights);
 
-  const float* weights_ptr = (float*)&file_ptr[offset];
-  memory_map_weights(&t->weights, &t->config, weights_ptr, shared_weights);
+cleanup:
+  UllmFileUnmap(&checkpoint_file);
   return ULLM_STATUS_OK;
 }
 
@@ -127,6 +163,21 @@ static UllmStatus UllmLlama2BuildTransformer(const UllmLlama2RunConfig* config,
 }
 
 static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
+  UllmMemoryFree(t->weights.token_embedding_table);
+  UllmMemoryFree(t->weights.rms_att_weight);
+  UllmMemoryFree(t->weights.rms_ffn_weight);
+  UllmMemoryFree(t->weights.wq);
+  UllmMemoryFree(t->weights.wk);
+  UllmMemoryFree(t->weights.wv);
+  UllmMemoryFree(t->weights.wo);
+  UllmMemoryFree(t->weights.w1);
+  UllmMemoryFree(t->weights.w2);
+  UllmMemoryFree(t->weights.w3);
+  UllmMemoryFree(t->weights.rms_final_weight);
+  if (t->weights.wcls != t->weights.token_embedding_table) {
+    UllmMemoryFree(t->weights.wcls);
+  }
+
   UllmMemoryFree(t->state.x);
   UllmMemoryFree(t->state.xb);
   UllmMemoryFree(t->state.xb2);
@@ -142,18 +193,26 @@ static void UllmLlama2FreeTransformer(UllmLlama2Transformer* t) {
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float* o, float* x, const float* weight, int size) {
-  // calculate sum of squares
+float sumsquares(const float* x, const float* y, int size) {
   float ss = 0.0f;
-  for (int j = 0; j < size; j++) {
-      ss += x[j] * x[j];
+  const float* x_end = x + size;
+  while (x < x_end) {
+    ss += *x * *y;
+    x++;
+    y++;
   }
+
+  return ss;
+}
+
+void rmsnorm(float* o, float* x, const float* weight, int size) {
+  float ss = sumsquares(x, x, size);
   ss /= size;
   ss += 1e-5f;
   ss = 1.0f / sqrtf(ss);
   // normalize and scale
   for (int j = 0; j < size; j++) {
-      o[j] = weight[j] * (ss * x[j]);
+    o[j] = weight[j] * (ss * x[j]);
   }
 }
 
@@ -177,17 +236,49 @@ void softmax(float* x, int size) {
   }
 }
 
-void matmul(float* xout, float* x, const float* w, int n, int d) {
+#ifdef ULLM_ALTIVEC_ENABLED
+
+void matmul(float* xout, const float* x, const float* w, int n, int d) {
   // W (d,n) @ x (n,) -> xout (d,)
-  // by far the most amount of time is spent inside this little function
-  for (int i = 0; i < d; i++) {
-    float val = 0.0f;
-    for (int j = 0; j < n; j++) {
-      val += w[i * n + j] * x[j];
+  const long addr_step = 4 * sizeof(float);
+  const long w_addr_end = n * d * sizeof(float);
+  const long x_addr_end = n * sizeof(float);
+
+  long w_addr = 0;
+  while (w_addr < w_addr_end) {
+    __attribute__ ((aligned(16))) float psum[4] = {};
+    vector float sum_vec = vec_ld(0, &psum[0]);
+    for (long x_addr = 0; x_addr < x_addr_end; x_addr += addr_step) {
+      vector float w_vec = vec_ld(w_addr, w);
+      vector float x_vec = vec_ld(x_addr, x);
+      sum_vec = vec_madd(w_vec, x_vec, sum_vec);
+      w_addr += addr_step;
     }
-    xout[i] = val;
+
+    vec_st(sum_vec, 0, psum);
+    *xout++ = psum[0] + psum[1] + psum[2] + psum[3];
   }
 }
+
+#else
+
+void matmul(float* xout, const float* x, const float* w, int n, int d) {
+  // W (d,n) @ x (n,) -> xout (d,)
+  const float* wptr = w;
+  const float* wptr_end = &wptr[n * d];
+  const float* xptr_end = &x[n];
+  while (wptr < wptr_end) {
+    float sum = 0.0f;
+    const float* xptr = x;
+    while (xptr < xptr_end) {
+      sum += *wptr++ * *xptr++;
+    }
+
+    *xout++ = sum;
+  }
+}
+
+#endif
 
 float* forward(UllmLlama2Transformer* transformer, int token, int pos) {
   // a few convenience variables
@@ -248,10 +339,7 @@ float* forward(UllmLlama2Transformer* transformer, int token, int pos) {
         // get the key vector for this head and at this timestep
         float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * head_size;
         // calculate the attention score as the dot product of q and k
-        float score = 0.0f;
-        for (int i = 0; i < head_size; i++) {
-          score += q[i] * k[i];
-        }
+        float score = sumsquares(q, k, head_size);
         score /= sqrtf(head_size);
         // save the score to the attention buffer
         att[t] = score;
@@ -795,5 +883,4 @@ void UllmLlama2Deinit(UllmLlama2State* state) {
   UllmLlama2FreeSampler(&state->sampler);
   UllmLlama2FreeTokenizer(state);
   UllmLlama2FreeTransformer(&state->transformer);
-  UllmFileUnmap(&state->checkpoint_file);
 }

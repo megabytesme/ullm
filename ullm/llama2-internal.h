@@ -47,23 +47,23 @@ typedef struct {
 
 typedef struct {
   // token embedding table
-  const float* token_embedding_table;    // (vocab_size, dim)
+  float* token_embedding_table;    // (vocab_size, dim)
   // weights for rmsnorms
-  const float* rms_att_weight; // (layer, dim) rmsnorm weights
-  const float* rms_ffn_weight; // (layer, dim)
+  float* rms_att_weight; // (layer, dim) rmsnorm weights
+  float* rms_ffn_weight; // (layer, dim)
   // weights for matmuls. note dim == n_heads * head_size
-  const float* wq; // (layer, dim, n_heads * head_size)
-  const float* wk; // (layer, dim, n_kv_heads * head_size)
-  const float* wv; // (layer, dim, n_kv_heads * head_size)
-  const float* wo; // (layer, n_heads * head_size, dim)
+  float* wq; // (layer, dim, n_heads * head_size)
+  float* wk; // (layer, dim, n_kv_heads * head_size)
+  float* wv; // (layer, dim, n_kv_heads * head_size)
+  float* wo; // (layer, n_heads * head_size, dim)
   // weights for ffn
-  const float* w1; // (layer, hidden_dim, dim)
-  const float* w2; // (layer, dim, hidden_dim)
-  const float* w3; // (layer, hidden_dim, dim)
+  float* w1; // (layer, hidden_dim, dim)
+  float* w2; // (layer, dim, hidden_dim)
+  float* w3; // (layer, hidden_dim, dim)
   // final rmsnorm
-  const float* rms_final_weight; // (dim,)
+  float* rms_final_weight; // (dim,)
   // (optional) classifier weights for the logits, on the last layer
-  const float* wcls;
+  float* wcls;
 } UllmLlama2TransformerWeights;
 
 typedef struct {
