@@ -50,3 +50,10 @@ Run:
 `ullm` contains a heavily modified version of the `llama2.c` project.
 
 Forked from [llama2.c](https://github.com/karpathy/llama2.c/tree/350e04fe35433e6d2941dce5a1f53308f87058eb).
+
+This code retains the MIT license, and the headers indicate as such.
+
+## Credits
+
+Thanks to Andrej Karpathy for the llama2.c project. I really enjoyed
+experimenting with the code.
