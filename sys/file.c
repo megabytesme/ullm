@@ -29,10 +29,8 @@
 
 #define ULLM_LOG_TAG "ullm.file"
 
-
-UllmStatus UllmFileMap(const char* path, UllmFileHandle* handle,
-    const char** ptr, uint64_t* size) {
-  memset(handle, 0, sizeof(UllmFileHandle));
+UllmStatus UllmFileOpen(const char* path, UllmFile* file) {
+  memset(file, 0, sizeof(UllmFile));
 
   struct stat st;
   if (stat(path, &st) != 0) {
@@ -40,55 +38,49 @@ UllmStatus UllmFileMap(const char* path, UllmFileHandle* handle,
     return ULLM_STATUS_IO_ERROR;
   }
 
-  handle->fd = open(path, O_RDONLY);
-  if (handle->fd < 0) {
+  file->fd = open(path, O_RDONLY);
+  if (file->fd < 0) {
     ULOGE("Failed to open file '%s': %s (%d)", path, strerror(errno), errno);
     return ULLM_STATUS_IO_ERROR;
   }
 
-  *size = st.st_size;
-  *ptr = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, handle->fd, 0);
-  if (*ptr == MAP_FAILED) {
-    ULOGE("Failed to mmap '%s': %s (%d)", path, strerror(errno), errno);
+  file->size = st.st_size;
+  ULOGI("Opened file '%s' with size %" PRIu64, path, file->size);
+  return ULLM_STATUS_OK;
+}
+
+UllmStatus UllmFileRead(const UllmFile* file, void* dst, uint64_t size) {
+  ssize_t bytes_read = read(file->fd, dst, size);
+  if (bytes_read < 0) {
+    ULOGE("Failed to read file: %s (%d)", strerror(errno), errno);
     return ULLM_STATUS_IO_ERROR;
   }
 
-  handle->ptr = *ptr;
-  handle->size = st.st_size;
-  ULOGI("Mapped file '%s' with size %" PRIu64 ", handle %p",
-      path, handle->size, handle);
   return ULLM_STATUS_OK;
 }
 
-void UllmFileUnmap(UllmFileHandle* handle) {
-  if (handle == NULL) {
-    return;
+UllmStatus UllmFileSeek(const UllmFile* file, uint64_t advance) {
+  off_t result = lseek(file->fd, advance, SEEK_CUR);
+  if (result < 0) {
+    ULOGE("Failed to seek file: %s (%d)", strerror(errno), errno);
+    return ULLM_STATUS_IO_ERROR;
   }
 
-  if (handle->ptr != NULL) {
-    int status = munmap((void*)handle->ptr, handle->size);
-    if (status != 0) {
-      ULOGE("Failed to unmap file: %s (%d), handle %p",
-          strerror(errno), errno, handle);
-    } else {
-      ULOGI("Unmapped file, handle %p", handle);
-    }
-  }
-
-  if (handle->fd >= 0) {
-    close(handle->fd);
-  }
+  return ULLM_STATUS_OK;
 }
 
-UllmStatus UllmFileRead(const UllmFileHandle* file, uint64_t* offset,
-    void* dst, uint64_t size) {
-  if ((file->size - *offset) < size) {
-    ULOGE("File truncated when reading %" PRIu64 " from offset %" PRIu64,
-        size, *offset);
-    return ULLM_STATUS_INVALID_ARGUMENT;
+UllmStatus UllmFileGetPos(const UllmFile* file, uint64_t* pos) {
+  off_t result = lseek(file->fd, 0, SEEK_CUR);
+  if (result < 0) {
+    ULOGE("Failed to seek file for pos: %s (%d)", strerror(errno), errno);
+    return ULLM_STATUS_IO_ERROR;
   }
 
-  memcpy(dst, &file->ptr[*offset], size);
-  *offset = *offset + size;
   return ULLM_STATUS_OK;
+}
+
+void UllmFileClose(UllmFile* file) {
+  if (file->fd >= 0) {
+    close(file->fd);
+  }
 }

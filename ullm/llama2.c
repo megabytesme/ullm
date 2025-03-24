@@ -67,7 +67,7 @@ static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   return ULLM_STATUS_OK;
 }
 
-static UllmStatus CopyWeight(const char* ptr, uint64_t* offset,
+static UllmStatus ReadWeight(UllmFile* file,
     float** dst, size_t size, const char* name) {
   size_t buf_size = size * sizeof(float);
   *dst = UllmMemoryAlloc(buf_size);
@@ -76,49 +76,51 @@ static UllmStatus CopyWeight(const char* ptr, uint64_t* offset,
     return ULLM_STATUS_OOM;
   }
 
-  memcpy(*dst, &ptr[*offset], buf_size);
-  *offset += buf_size;
-  return ULLM_STATUS_OK;
+  return UllmFileRead(file, *dst, buf_size);
 }
 
-static UllmStatus MemoryMapWeights(UllmLlama2TransformerWeights *w,
-    UllmLlama2Config* p, const char* ptr, uint64_t offset,
-    uint64_t file_size, int shared_weights) {
+static UllmStatus ReadWeights(UllmLlama2TransformerWeights *w,
+    UllmLlama2Config* p, UllmFile* file, int shared_weights) {
   int head_size = p->dim / p->n_heads;
   uint64_t n_layers = p->n_layers;
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->token_embedding_table,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->token_embedding_table,
       p->vocab_size * p->dim, "token_embedding_table"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_att_weight,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->rms_att_weight,
       n_layers * p->dim, "rms_att_weight"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wq,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->wq,
       n_layers * p->dim * (p->n_heads * head_size), "wq"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wk,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->wk,
       n_layers * p->dim * (p->n_kv_heads * head_size), "wk"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wv,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->wv,
       n_layers * p->dim * (p->n_kv_heads * head_size), "wv"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->wo,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->wo,
       n_layers * (p->n_heads * head_size) * p->dim, "wo"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_ffn_weight,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->rms_ffn_weight,
       n_layers * p->dim, "rms_ffn_weight"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w1,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->w1,
       n_layers * p->dim * p->hidden_dim, "w1"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w2,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->w2,
       n_layers * p->hidden_dim * p->dim, "w2"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->w3,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->w3,
       n_layers * p->dim * p->hidden_dim, "w3"));
-  ULLM_RETURN_IF_ERROR(CopyWeight(ptr, &offset, &w->rms_final_weight,
+  ULLM_RETURN_IF_ERROR(ReadWeight(file, &w->rms_final_weight,
       p->dim, "rms_final_weight"));
-  offset += p->seq_len * head_size / 2; // skip what used to be freq_cis_real (for RoPE)
-  offset += p->seq_len * head_size / 2; // skip what used to be freq_cis_imag (for RoPE)
+  ULLM_RETURN_IF_ERROR(UllmFileSeek(file, p->seq_len * head_size / 2));
+  ULLM_RETURN_IF_ERROR(UllmFileSeek(file, p->seq_len * head_size / 2));
+
   if (shared_weights) {
     w->wcls = w->token_embedding_table;
   } else {
-    uint64_t buf_size = file_size - offset;
+    uint64_t offset;
+    ULLM_RETURN_IF_ERROR(UllmFileGetPos(file, &offset));
+    uint64_t buf_size = file->size - offset;
     w->wcls = UllmMemoryAlloc(buf_size);
     if (w->wcls == NULL) {
       ULOGE("Failed to allocate wcls");
       return ULLM_STATUS_OOM;
     }
+
+    ULLM_RETURN_IF_ERROR(UllmFileRead(file, w->wcls, buf_size));
   }
 
   return ULLM_STATUS_OK;
@@ -127,26 +129,22 @@ static UllmStatus MemoryMapWeights(UllmLlama2TransformerWeights *w,
 static UllmStatus UllmLlama2ReadCheckpoint(const UllmLlama2RunConfig* config,
     UllmLlama2State* state) {
   // memory map the Transformer weights into the data pointer
-  const char* file_ptr;
-  uint64_t file_size;
-  UllmFileHandle checkpoint_file;
-  ULLM_RETURN_IF_ERROR(UllmFileMap(config->checkpoint_path,
-      &checkpoint_file, &file_ptr, &file_size));
+  UllmFile checkpoint_file;
+  ULLM_RETURN_IF_ERROR(UllmFileOpen(config->checkpoint_path, &checkpoint_file));
 
-  uint64_t offset = 0;
   UllmLlama2Transformer* t = &state->transformer;
   UllmStatus status = ULLM_STATUS_OK;
-  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(
-      &checkpoint_file, &offset, &t->config, sizeof(UllmLlama2Config)));
+  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&checkpoint_file,
+      &t->config, sizeof(UllmLlama2Config)));
 
   // negative vocab size is hacky way of signaling unshared weights. bit yikes.
   int shared_weights = t->config.vocab_size > 0 ? 1 : 0;
   t->config.vocab_size = abs(t->config.vocab_size);
-  status = MemoryMapWeights(&t->weights, &t->config, file_ptr, offset,
-      file_size, shared_weights);
+  status = ReadWeights(&t->weights, &t->config,
+      &checkpoint_file, shared_weights);
 
 cleanup:
-  UllmFileUnmap(&checkpoint_file);
+  UllmFileClose(&checkpoint_file);
   return ULLM_STATUS_OK;
 }
 
@@ -436,16 +434,12 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
     return ULLM_STATUS_OOM;
   }
 
-  UllmFileHandle tokenizer_file;
-  const char* file_ptr;
-  uint64_t file_size;
-  ULLM_RETURN_IF_ERROR(UllmFileMap(config->tokenizer_path,
-      &tokenizer_file, &file_ptr, &file_size));
+  UllmFile tokenizer_file;
+  ULLM_RETURN_IF_ERROR(UllmFileOpen(config->tokenizer_path, &tokenizer_file));
 
-  uint64_t offset = 0;
   uint32_t max_token_length = 0;
   UllmStatus status = ULLM_STATUS_OK;
-  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
+  ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file,
       &max_token_length, sizeof(uint32_t)));
 
   // Create a temporary buffer that will store merge candidates of always two
@@ -459,11 +453,11 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   }
 
   for (int i = 0; i < vocab_size; i++) {
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file,
         &t->vocab_scores[i], sizeof(float)));
 
     uint32_t len;
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file,
         &len, sizeof(uint32_t)));
     t->vocab[i] = (char *)UllmMemoryAlloc(len + 1);
     if (t->vocab[i] == NULL) {
@@ -471,7 +465,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
       ULLM_GOTO_IF_ERROR(cleanup, status, ULLM_STATUS_OOM);
     }
 
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&tokenizer_file,
         t->vocab[i], len));
     t->vocab[i][len] = '\0'; // add the string terminating token
   }
@@ -483,7 +477,7 @@ UllmStatus UllmLlama2BuildTokenizer(const UllmLlama2RunConfig* config,
   qsort(t->sorted_vocab, vocab_size, sizeof(UllmLlama2TokenIndex), compare_tokens);
 
 cleanup:
-  UllmFileUnmap(&tokenizer_file);
+  UllmFileClose(&tokenizer_file);
   return status;
 }
 
