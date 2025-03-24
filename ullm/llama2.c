@@ -45,9 +45,6 @@ static UllmStatus UllmLlama2MallocRunState(UllmLlama2Transformer* t) {
   UllmLlama2RunState* s = &t->state;
   UllmLlama2Config* p = &t->config;
   int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
-  ULOGD("p->dim=%" PRIu32 ", sizeof(float)=%zu, total=%zu",
-    p->dim, sizeof(float),
-    p->dim * sizeof(float));
   s->x = UllmMemoryAlloc(p->dim * sizeof(float));
   s->xb = UllmMemoryAlloc(p->dim * sizeof(float));
   s->xb2 = UllmMemoryAlloc(p->dim * sizeof(float));
