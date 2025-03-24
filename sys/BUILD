@@ -29,3 +29,14 @@ cc_library(
         "//util:log",
     ],
 )
+
+# time #########################################################################
+
+cc_library(
+    name = "time",
+    srcs = ["time.c"],
+    hdrs = ["time.h"],
+    deps = [
+        "//util:status",
+    ],
+)

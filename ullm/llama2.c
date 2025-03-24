@@ -833,39 +833,48 @@ UllmStatus UllmLlama2Generate(const UllmLlama2RunConfig* config,
     return ULLM_STATUS_OOM;
   }
 
+  // Sample the start time.
+  uint64_t start_time_ns = UllmTimeNanos();
+
   // encode the (string) prompt into tokens sequence
   int num_prompt_tokens = 0;
   UllmLlama2Encode(config, state, 1, 0, prompt_tokens, &num_prompt_tokens);
   if (num_prompt_tokens == 0) {
-      ULOGE("Prompt contains zero tokens");
-      return ULLM_STATUS_INVALID_ARGUMENT;
+    ULOGE("Prompt contains zero tokens");
+    return ULLM_STATUS_INVALID_ARGUMENT;
   }
 
   int next; // will store the next token in the sequence
   int token = prompt_tokens[0]; // kick off with the first token in the prompt
   unsigned int pos = 0;     // position in the sequence
   while (pos < config->steps) {
-      // forward the transformer to get logits for the next token
-      float* logits = forward(&state->transformer, token, pos);
+    // forward the transformer to get logits for the next token
+    float* logits = forward(&state->transformer, token, pos);
 
-      // advance the state machine
-      if (pos < num_prompt_tokens - 1) {
-          // if we are still processing the input prompt, force the next prompt token
-          next = prompt_tokens[pos + 1];
-      } else {
-          // otherwise sample the next token from the logits
-          next = sample(config, state, logits);
-      }
-      pos++;
+    // advance the state machine
+    if (pos < num_prompt_tokens - 1) {
+      // if we are still processing the input prompt, force the next prompt token
+      next = prompt_tokens[pos + 1];
+    } else {
+      // otherwise sample the next token from the logits
+      next = sample(config, state, logits);
+    }
+    pos++;
 
-      // data-dependent terminating condition: the BOS (=1) token delimits sequences
-      if (next == 1) { break; }
+    // data-dependent terminating condition: the BOS (=1) token delimits sequences
+    if (next == 1) { break; }
 
-      UllmLlama2Decode(config, &state->tokenizer, token, next);
-      token = next;
+    UllmLlama2Decode(config, &state->tokenizer, token, next);
+    token = next;
   }
 
   UllmLlama2EmitPiece(config, "\n");
+  if (pos > 1) {
+    uint64_t end_time_ns = UllmTimeNanos();
+    double token_rate = (pos - 1) / ((end_time_ns - start_time_ns) / 1000000000.0);
+    ULOGI("Complete: %0.2f token/s", token_rate);
+  }
+
   UllmMemoryFree(prompt_tokens);
   return ULLM_STATUS_OK;
 }

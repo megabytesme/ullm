@@ -18,6 +18,7 @@ cc_library(
     deps = [
         "//sys:file",
         "//sys:memory",
+        "//sys:time",
         "//util:log",
         "//util:status",
     ],
