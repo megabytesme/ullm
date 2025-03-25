@@ -2,6 +2,8 @@
 
 An effort to bring LLMs to very resource-constrained systems.
 
+This is a toy project. Please don't take it too seriously :)
+
 ## Build, Test and Run
 
 ### Bazel
