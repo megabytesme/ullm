@@ -36,33 +36,33 @@ int main(int argc, char** argv) {
       "help", "h", "show usage", false);
   c_flags_parse(&argc, &argv, false);
 
-  const char* file_ptr;
-  uint64_t file_size;
-  UllmFileHandle file;
+  UllmFile file;
   UllmStatus status = ULLM_STATUS_OK;
   if (*help) {
     c_flags_usage();
     return -1;
   } else if (strlen(*checkpoint_path) > 0) {
-    status = UllmFileMap(*checkpoint_path, &file, &file_ptr, &file_size);
+    status = UllmFileOpen(*checkpoint_path, &file);
     if (status != ULLM_STATUS_OK) {
       ULOGE("Failed to map checkpoint: %s", UllmStatusToString(status));
       goto cleanup;
     }
 
-    if ((file_size % 4) != 0) {
+    if ((file.size % 4) != 0) {
       ULOGE("Checkpoint size must be a multiple of 4");
       status = ULLM_STATUS_INVALID_ARGUMENT;
       goto cleanup;
     }
 
-    for (uint64_t i = 0; i < file_size; i+= 4) {
-      const uint32_t le_value = *(const uint32_t*)&file_ptr[i];
+    for (uint64_t i = 0; i < file.size; i+= sizeof(uint32_t)) {
+      uint32_t le_value = 0;
+      ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file,
+          &le_value, sizeof(uint32_t)));
       const uint32_t be_value = __builtin_bswap32(le_value);
       fwrite(&be_value, sizeof(uint32_t), 1, stdout);
     }
   } else if (strlen(*tokenizer_path) > 0) {
-    status = UllmFileMap(*tokenizer_path, &file, &file_ptr, &file_size);
+    status = UllmFileOpen(*tokenizer_path, &file);
     if (status != ULLM_STATUS_OK) {
       ULOGE("Failed to map checkpoint: %s", UllmStatusToString(status));
       goto cleanup;
@@ -70,25 +70,28 @@ int main(int argc, char** argv) {
 
     uint32_t le_value = 0;
     uint64_t offset = 0;
-    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file, &offset,
+    ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file,
         &le_value, sizeof(uint32_t)));
+    offset += sizeof(uint32_t);
     uint32_t be_value = __builtin_bswap32(le_value);
     fwrite(&be_value, sizeof(uint32_t), 1, stdout);
 
-    while (offset < file_size) {
-      ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file, &offset,
+    while (offset < file.size) {
+      ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file,
           &le_value, sizeof(uint32_t)));
+      offset += sizeof(uint32_t);
       be_value = __builtin_bswap32(le_value);
       fwrite(&be_value, sizeof(uint32_t), 1, stdout);
 
-      ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file, &offset,
+      ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file,
           &le_value, sizeof(uint32_t)));
+      offset += sizeof(uint32_t);
       be_value = __builtin_bswap32(le_value);
       fwrite(&be_value, sizeof(uint32_t), 1, stdout);
       for (uint32_t i = 0; i < le_value; i++) {
         char c;
-        ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file, &offset,
-            &c, sizeof(c)));
+        ULLM_GOTO_IF_ERROR(cleanup, status, UllmFileRead(&file, &c, sizeof(c)));
+        offset += sizeof(char);
         fwrite(&c, sizeof(char), 1, stdout);
       }
     }
@@ -98,6 +101,6 @@ int main(int argc, char** argv) {
   }
 
 cleanup:
-  UllmFileUnmap(&file);
+  UllmFileClose(&file);
   return status == ULLM_STATUS_OK ? 0 : -1;
 }
