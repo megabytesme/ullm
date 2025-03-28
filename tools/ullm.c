@@ -94,14 +94,15 @@ int main(int argc, char** argv) {
   if (*help) {
     c_flags_usage();
     return 0;
-  } else if (strlen(*prompt) == 0 || strlen(*model) == 0
-      || strlen(*checkpoint_path) == 0 || strlen(*tokenizer_path) == 0) {
+  } else if (strlen(*prompt) == 0 || strlen(*model) == 0) {
     c_flags_usage();
   } else {
     Args args = {
       .prompt = *prompt,
-      .checkpoint_path = *checkpoint_path,
-      .tokenizer_path = *tokenizer_path,
+      .checkpoint_path = strlen(*checkpoint_path) == 0
+          ? "ullm/tinystories110M.bin" : *checkpoint_path,
+      .tokenizer_path = strlen(*tokenizer_path) == 0
+          ? "ullm/tokenizer.bin" : *tokenizer_path,
     };
 
     setbuf(stdout, NULL);

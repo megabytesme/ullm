@@ -25,3 +25,10 @@ http_file(
     integrity = "sha256-zVkGRNljhnorbloRB/UfrWY8QdecFJ++y7sflfqB9Jo=",
     downloaded_file_path = "tinystories15M.bin",
 )
+
+http_file(
+    name = "tinystories110M",
+    url = "https://huggingface.co/karpathy/tinyllamas/resolve/main/stories110M.bin",
+    integrity = "sha256-UVJnFocmoe0TF6ZKQISS5q87Z8H3HFvZjAHZ1yGAOiQ=",
+    downloaded_file_path = "tinystories110M.bin",
+)

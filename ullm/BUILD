@@ -29,13 +29,16 @@ genrule(
     srcs = [
        "@llama2//:tokenizer.bin",
        "@tinystories15M//file",
+       "@tinystories110M//file",
     ],
     outs = [
        "tinystories15M.bin",
+       "tinystories110M.bin",
        "tokenizer.bin",
     ],
     cmd = """
         cp $(location @tinystories15M//file) $(location :tinystories15M.bin);
+        cp $(location @tinystories110M//file) $(location :tinystories110M.bin);
         cp $(location @llama2//:tokenizer.bin) $(location :tokenizer.bin);
     """,
 )
