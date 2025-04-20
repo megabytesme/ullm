@@ -34,6 +34,7 @@ CFLAGS := \
     -I out/c-flags/lib \
     -std=c99 \
     -Wall \
+    -D_POSIX_C_SOURCE=200809L \
     -O$(OPT)
 
 LDFLAGS := \
