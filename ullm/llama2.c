@@ -30,6 +30,7 @@
 #include <string.h>
 #include <endian.h>
 #include <time.h>
+#include <omp.h>
 
 #ifdef __ALTIVEC__
 #include <altivec.h>
@@ -427,6 +428,8 @@ void matmul(float* xout, const float* x, const float* w, int n, int d) {
   // W (d,n) @ x (n,) -> xout (d,)
   // n: input dimension
   // d: output dimension
+
+  #pragma omp parallel for
   for (int i = 0; i < d; i++) {
       float val = 0.0f;
       for (int j = 0; j < n; j++) {

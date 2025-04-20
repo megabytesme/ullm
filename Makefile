@@ -35,10 +35,12 @@ CFLAGS := \
     -std=c99 \
     -Wall \
     -D_POSIX_C_SOURCE=200809L \
+    -fopenmp \
     -O$(OPT)
 
 LDFLAGS := \
-    -lm
+    -lm \
+    -fopenmp
 
 .PHONY:
 all: $(BIN).elf
