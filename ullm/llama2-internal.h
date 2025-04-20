@@ -26,6 +26,7 @@
 #define ULLM_ULLM_LLAMA2_INTERNAL_H_
 
 #include <stdint.h>
+#include <stddef.h>
 
 // Internal data structures for inference.
 
@@ -99,6 +100,7 @@ typedef struct {
   float* vocab_scores;
   UllmLlama2TokenIndex *sorted_vocab;
   char* token_buffer;
+  size_t token_buffer_capacity;
 } UllmLlama2Tokenizer;
 
 typedef struct {
