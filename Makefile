@@ -19,8 +19,6 @@ SRCS := \
     sys/time.c \
     tools/ullm.c
 
-OPT := 2
-
 BIN := ullm
 
 # build ########################################################################
@@ -35,8 +33,9 @@ CFLAGS := \
     -std=c99 \
     -Wall \
     -D_POSIX_C_SOURCE=200809L \
+    -mcpu=native \
     -fopenmp \
-    -O$(OPT)
+    -Ofast
 
 LDFLAGS := \
     -lm \
